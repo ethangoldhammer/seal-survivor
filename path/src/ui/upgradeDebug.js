@@ -208,6 +208,7 @@ export function initUpgradeDebug(getTime = null, getWorld = null) {
     const n = player.upgrades.length;
     player.upgrades.length = 0;
     recomputeStats();
+    if (n) stampDebug('debugGranted');
     status = `cleared ${n} pick${n === 1 ? '' : 's'}`;
     render();
   });
@@ -272,6 +273,7 @@ function bossControls() {
         // is the wire value for NONE, so ROLL has to become `undefined`.
         perk: perkPick === ROLL ? undefined : (perkPick === NONE ? null : perkPick),
       });
+      if (e) stampDebug('debugSpawned');
       status = e
         ? `spawned ${bossState.archetype?.id ?? '?'}${bossState.perk ? ` · ${bossState.perk.id}` : ' · no perk'} — "${bossState.name}"`
         : 'could not spawn a boss';
@@ -377,6 +379,7 @@ function creatureControls() {
       if (!w?.scene) { status = 'no scene — nothing to clear'; render(); return; }
       const n = enemies.length;
       resetEnemies(w.scene);
+      if (n) stampDebug('debugSpawned');
       status = `cleared ${n} creature${n === 1 ? '' : 's'}`;
       render();
     }),
@@ -436,6 +439,10 @@ function stormControls() {
       // holding a creature on its way back to the pool.
       const boss = bossState.enemy ?? null;
       const staged = startAttractorStorm(w.scene, stormPick, null, { follow: boss });
+      // A staged storm is a boss attack fired into a run that did not earn it:
+      // it damages the seal and kills creatures, so the threat and survival
+      // figures stop describing the game the spawner was playing.
+      if (staged) stampDebug('debugSpawned');
       status = staged
         ? `staged ${staged.id} · ${staged.shape}/${staged.plane} · ${boss ? 'riding the boss' : 'mid-water'}`
         : `no study called ${stormPick}`;
@@ -445,6 +452,9 @@ function stormControls() {
       const w = world();
       const was = activeAttractorStorm();
       stopAttractorStorm(w?.scene ?? null);
+      // Only when one was running: calling off a REAL boss's storm mid-fight
+      // is interference too, and the button cannot tell the two apart.
+      if (was) stampDebug('debugSpawned');
       // Cubes already in the air are NOT deleted — see steerCube. Said out
       // loud here because a Stop button that leaves things on screen looks
       // broken unless you know it is deliberate.
@@ -496,6 +506,11 @@ export function spawnCreature(key, count = 1) {
     made.push(e);
   }
   if (!made.length) return 0;
+
+  // Stamped here rather than at the button, so a call from the console counts
+  // too — and only once a body actually arrived, because a request the arena
+  // refused at maxAlive changed nothing about the run.
+  stampDebug('debugSpawned');
 
   // LAID OUT AFTER THE FACT, because the spacing has to come from the body and
   // the body's size is not known until it exists: `radius` is the authored
@@ -705,6 +720,28 @@ function atCap(def) {
  * that step a level counter (`bounceLevel`, `garlicLevel`) read off tables
  * sized to the cap — walking past the end tells you nothing true.
  */
+/**
+ * Stamp the run in progress as one the debug panel interfered with.
+ *
+ * TWO FIELDS, not one, because they spoil different halves of the record: a
+ * granted upgrade makes the build a lie (damage share, pick order, what a
+ * level-12 seal is carrying), and an on-demand spawn makes the WORLD a lie
+ * (threat counts, kills per minute, what the ramp was actually sending). A
+ * reader looking at why a run was set aside is better served by which.
+ *
+ * Both are written straight onto the run object, which endRun serialises
+ * whole — so the stamp reaches the .jsonl by the same route every other field
+ * does, with nothing to keep in sync.
+ *
+ * Nothing here checks DEV: the whole module is behind DEV_UI in main.js, so a
+ * shipped build has no way to reach any of it.
+ */
+function stampDebug(field) {
+  if (!playtest.isRecording()) return;
+  const run = playtest.currentRun();
+  if (run) run[field] = true;
+}
+
 export function grantUpgrade(id, { rarity: tier = null } = {}) {
   const def = CONFIG.upgrades.find((u) => u.id === id);
   if (!def) {
@@ -728,11 +765,8 @@ export function grantUpgrade(id, { rarity: tier = null } = {}) {
   // also stamped: a run with granted upgrades is not a playtest, and the
   // stored .jsonl is pooled across sessions, so it has to be possible to tell
   // the two apart later rather than wondering why one run had everything.
-  if (playtest.isRecording()) {
-    playtest.recordUpgrade(def.id, runTime());
-    const run = playtest.currentRun();
-    if (run) run.debugGranted = true;
-  }
+  if (playtest.isRecording()) playtest.recordUpgrade(def.id, runTime());
+  stampDebug('debugGranted');
 
   return { def, before, after: { ...player.stats } };
 }
@@ -746,6 +780,10 @@ export function revokeUpgrade(id) {
   if (i < 0) return false;
   player.upgrades.splice(i, 1);
   recomputeStats();
+  // Taking a pick BACK spoils the record exactly as much as handing one out:
+  // the damage already dealt with the ability is still in the ledger, and the
+  // build the run ends holding is not the build that played it.
+  stampDebug('debugGranted');
   return true;
 }
 

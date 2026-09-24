@@ -2,8 +2,8 @@
 // A DOUBLE-CLICKABLE .app AROUND A SHELL SCRIPT.
 //
 // Shared by every "one button in ~/Applications" generator in this repo:
-// `film:setup` (tools/make-launchers.mjs) and `sealitaire:app`
-// (tools/sealitaire-app.mjs). It is a module rather than a copied function
+// `film:setup` (tools/make-launchers.mjs) and the three game buttons
+// (tools/game-app.mjs). It is a module rather than a copied function
 // because what it knows is not the bundle layout — that is twenty lines of
 // plist — but the three things below, each of which was learned once, the
 // hard way, and fails silently when a second copy of this forgets it.

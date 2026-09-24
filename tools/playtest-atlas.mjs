@@ -27,6 +27,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDebugRun, debugRunReason } from '../path/src/systems/playtestAnalysis.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -100,10 +101,43 @@ function worstSource(run) {
 // keywords would be legal but pointless, and stripping them keeps the injected
 // text obviously inert. The `</script>` guard is the one thing that could break
 // out of the tag; nothing else in JS can.
-function inlineAnalysis(src) {
-  return src
+//
+// AN `import` HAS TO BE RESOLVED, NOT STRIPPED. In a module script a bare
+// import is valid syntax, so nothing here throws — the browser simply tries to
+// FETCH the specifier against the page's own URL, 404s, and refuses to
+// evaluate the module. The page then renders an empty shell with no error in
+// it worth reading. That is the whole failure mode: it does not look like a
+// build problem, it looks like the atlas has no data.
+//
+// So each import is replaced with the imported file's own source, inlined
+// ahead of it by the same rules. There is exactly one today
+// (sourceLabels.generated.js, itself dependency-free by contract) and this
+// throws rather than guesses if a second one appears that it cannot find —
+// a silently blank dashboard is not an acceptable way to learn about it.
+async function inlineAnalysis(src, fromDir) {
+  const strip = (s) => s
     .replace(/^export\s+(function|const|class|let)\s/gm, '$1 ')
     .replace(/<\/script>/gi, '<\\/script>');
+
+  const imports = [...src.matchAll(/^import\s+\{[^}]*\}\s+from\s+'([^']+)';?$/gm)];
+  let head = '';
+  for (const [, spec] of imports) {
+    const path = resolve(fromDir, spec);
+    let dep;
+    try {
+      dep = await readFile(path, 'utf8');
+    } catch {
+      throw new Error(
+        `playtest-atlas: cannot inline '${spec}' (looked in ${path}).\n`
+        + 'Left in the page it would 404 at load and the atlas would render blank.',
+      );
+    }
+    if (/^import\s/m.test(dep)) {
+      throw new Error(`playtest-atlas: '${spec}' has imports of its own — inlining is one level deep.`);
+    }
+    head += strip(dep) + '\n';
+  }
+  return head + strip(src.replace(/^import\s+\{[^}]*\}\s+from\s+'[^']+';?$/gm, ''));
 }
 
 const main = async () => {
@@ -138,20 +172,30 @@ const main = async () => {
   // discards data is worse than one that shows bad data, because only one of
   // them can be argued with.
   const poisoned = [];
-  const runs = all.filter((r) => {
+  let runs = all.filter((r) => {
     const worst = worstSource(r);
     if (worst.amount < SENTINEL_HP) return true;
     poisoned.push({ ...worst, id: r.id, startedAt: r.startedAt });
     return false;
   });
 
+  // SET ASIDE THE RUNS THE DEBUG PANEL TOUCHED. See isDebugRun — a granted
+  // build or a hand-spawned school makes the run a thing being looked at
+  // rather than a thing being measured, and the atlas is entirely averages.
+  //
+  // Same contract as the quarantine above: counted, named in the page, and
+  // still on disk. The predicate is imported rather than rewritten so this
+  // page and `npm run playtest` can never disagree about which runs count.
+  const debugRuns = runs.filter(isDebugRun);
+  runs = runs.filter((r) => !isDebugRun(r));
+
   if (!runs.length) {
     console.error('No runs to render. Pull some with `npm run playtest:pull`, or pass --local.\n');
     process.exit(1);
   }
 
-  const analysisSrc = inlineAnalysis(await readFile(ANALYSIS, 'utf8'));
-  const html = renderPage(runs, analysisSrc, args, poisoned);
+  const analysisSrc = await inlineAnalysis(await readFile(ANALYSIS, 'utf8'), dirname(ANALYSIS));
+  const html = renderPage(runs, analysisSrc, args, poisoned, debugRuns);
   await writeFile(args.out, html, 'utf8');
 
   const builds = new Set(runs.map((r) => r.meta?.build ?? 'unknown'));
@@ -160,6 +204,9 @@ const main = async () => {
   for (const p of poisoned) {
     const when = new Date(p.startedAt).toISOString().slice(0, 16).replace('T', ' ');
     console.log(`  excluded ${when} — ${p.source} ${Math.round(p.amount).toLocaleString()} (placeholder hp)`);
+  }
+  if (debugRuns.length) {
+    console.log(`  excluded ${debugRuns.length} run${debugRuns.length === 1 ? '' : 's'} the u panel interfered with`);
   }
   console.log(`  wrote ${args.out}\n`);
 };
@@ -184,7 +231,19 @@ const asciiHtml = (s) => s.replace(/[^\x00-\x7F]/g, (c) => '&#x' + c.codePointAt
 // pair — which is exactly what a JS string literal wants.
 const asciiJs = (s) => s.replace(/[^\x00-\x7F]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 
-function renderPage(runs, analysisSrc, args, poisoned = []) {
+function renderPage(runs, analysisSrc, args, poisoned = [], debugRuns = []) {
+  // Named by what the panel did, not just counted: "8 granted upgrades" tells
+  // a reader which half of the numbers those runs would have bent, and a
+  // bare count does not.
+  const debugReasons = new Map();
+  for (const r of debugRuns) debugReasons.set(debugRunReason(r), (debugReasons.get(debugRunReason(r)) ?? 0) + 1);
+  const debugNote = debugRuns.length
+    ? `<p>${debugRuns.length} run${debugRuns.length === 1 ? '' : 's'} excluded: played with the
+       <code>u</code> debug panel open, which can hand the seal upgrades and put creatures in the
+       water on demand (${[...debugReasons].map(([why, n]) => `${n} ${why}`).join(', ')}). Those
+       runs are being looked at rather than measured, so an average over them describes nothing.
+       Still on disk in <code>playtest/runs.jsonl</code>.</p>`
+    : '';
   const excluded = poisoned.length
     ? `<p>${poisoned.length} run${poisoned.length === 1 ? '' : 's'} excluded: recorded before the
        recorder guarded against placeholder hp, so a single source carries
@@ -249,6 +308,7 @@ ${STYLE}
     rather than reimplemented, so this page and the terminal cannot disagree.</p>
     <p>Runs shorter than ${args.min}s are recorded but not judged.</p>
     ${excluded}
+    ${debugNote}
   </footer>
 </div>
 

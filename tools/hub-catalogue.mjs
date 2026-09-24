@@ -211,8 +211,13 @@ const GROUP_BY_NAME = {
   // `sealitaire:pull` reports until you pass it --apply, and
   // `sealitaire:push` is the one that puts the file in front of somebody else.
   sealitaire: 'Servers',
-  // Writes the Dock button into ~/Applications, the way `film:setup` does.
-  'sealitaire:app': 'Servers',
+  // The three Dock buttons, written into ~/Applications the way `film:setup`
+  // does. One generator, one row of tools/games.mjs each — see game-app.mjs.
+  'sealitaire:app': 'Servers', 'ball:app': 'Servers',
+  // Blubberball's door. It starts a dev server only if there is not one
+  // already, so it is the same kind of thing as the two viewers above even
+  // though what it opens is a browser tab.
+  ball: 'Servers',
   'sealitaire:build': 'Assets', 'sealitaire:shot': 'Assets',
   'sealitaire:card': 'Assets', 'sealitaire:mesh': 'Assets',
   'sealitaire:fish': 'Assets', 'sealitaire:music': 'Assets', 'sealitaire:loops': 'Assets',
@@ -225,6 +230,9 @@ const GROUP_BY_NAME = {
   // produce is the asset, so they sit with the other bakers rather than with
   // the reports.
   'sealitaire:sfx': 'Assets', 'sealitaire:sfx:fx': 'Assets', 'sealitaire:svg': 'Assets',
+  // Renders the table once per candidate palette into a scratch copy; it
+  // writes no project file, so it is a look at something, not a bake.
+  'sealitaire:bg': 'Audits',
   // Plays the bank one file at a time with the name on screen, so a keeper can
   // be written down against the event it is for. It changes nothing and the
   // output is a decision — the same reading as `wheel`.
@@ -284,6 +292,10 @@ const BLURBS = {
   'rive:rev': 'Builds, and writes a .rev beside it — the editor\'s format, which rive:pull diffs back.',
   'rive:try': 'Renders one frame of the project 60 frames in, to build/try.png. Lorem, not the real copy — see rive:preview.',
   'sealitaire:ship': 'Exports the Sealitaire .riv and copies it over public/sealitaire.riv — the file the site serves. No tool file, so the words are here.',
+  // THE THREE DOCK BUTTONS run one generator, so the header of game-app.mjs
+  // would describe all three identically. Each says which game it writes.
+  'sealitaire:app': 'Writes Sealitaire.app into ~/Applications — the table and its tuning save loop, no terminal. Icon from rive/sealitaire/build/shot.png. Re-run after moving the repo or changing node.',
+  'ball:app': 'Writes Blubberball.app into ~/Applications — finds or starts the game server and opens the pitch in a browser. No screenshot script, so it has no icon until you pass --icon.',
   'rive:push': 'Sends the local project up to the Rive editor. Checks the CLI is signed in first; if not, the first line says to run `rive login` in a terminal.',
   // THE SEALITAIRE CLI SCRIPTS, for the same reason: these six run
   // $HOME/.rive/bin/rive directly and have no tool file to read a sentence off.
@@ -299,7 +311,7 @@ const BLURBS = {
   'sealitaire:loops': 'Where the loops are in one long bounce: the bar grid, every 4-bar block\'s level, which blocks are the same take, and the section boundaries. Needs --bpm; --write seeds musicLoops.csv.',
   'sealitaire:fbx': 'An .fbx in public/models to a .glb beside it (mesh, rig, clips; UVs flipped to glTF\'s frame), so the tank pack can bake it: `-- seagull beluga`.',
   'sealitaire:rev': 'Builds, and writes build/sealitaire.rev beside it — the editor\'s format, which sealitaire:pull diffs back. Needs `rive login`.',
-  'sealitaire:pull': 'Asks the open Rive editor for its copy of the file and reports what changed there against the .rml — attributes only; added or removed elements are listed for a hand. Needs the editor app open on this project\'s file. Writes nothing.',
+  'sealitaire:pull': 'Downloads the linked Rive file and reports what changed there against the .rml — attributes only; additions, deletions and references to things we do not have are listed for a hand. Needs `rive login`, not the editor app. Writes nothing.',
   'sealitaire:pull:apply': 'The same diff, and then writes each changed attribute back into the tag it came from and re-verifies. Pull first and read the report; this is the second click.',
   'sealitaire:push': 'Sends rive/sealitaire up to the Rive editor, replacing what is open there. Pull first or the editor\'s unpulled nudges are gone. Checks the CLI is signed in first; if not, the first line says to run `rive login` in a terminal.',
   // Its banner's first sentence is the whole premise of the file (three

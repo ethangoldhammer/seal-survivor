@@ -297,7 +297,7 @@ function saveTanks(fields) {
 // into. That is not hypothetical; it fired on exactly that. Only the real
 // viewer has the rive binary at the START of its command line, because a
 // shell wrapper's argv starts with the shell.
-export const BUSY = 3;   // tools/sealitaire-app.mjs turns this one into a dialog
+export const BUSY = 3;   // tools/game-app.mjs turns this one into a dialog
 
 /** The pid of the viewer open on this project, or 0. Exported so the
  *  workbench can show the same answer rather than keeping its own pattern. */

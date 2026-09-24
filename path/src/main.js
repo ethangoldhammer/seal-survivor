@@ -906,7 +906,13 @@ async function boot() {
     onSplash: beginTitleSeal,
     // ...and where the card lets out. The name screen hands over to the 3D menu
     // now rather than straight into a run — see leaveSplash in ui/ui.js.
-    onMenu: showMainMenu,
+    //
+    // ...and then, ONCE, wherever the URL asked to be taken — `?ball` is the
+    // only one so far. After the menu rather than instead of it, because the
+    // screen the route opens is a screen the menu is behind: Back out of it
+    // has somewhere to land, and the route is the only thing that would have
+    // put it there. See takeOpeningRoute.
+    onMenu: () => { showMainMenu(); takeOpeningRoute(); },
     onStart: startGame,
     onRestart: restartRun,
     onLevelChoice: applyLevelChoice,
@@ -1822,34 +1828,44 @@ function resumeFromTable() {
   startMusicAtRest();
 }
 
+/**
+ * Blubberball's team select, from wherever it was asked for — the Seal sports
+ * row, or the `?ball` door below.
+ *
+ * Its own function because it now has two callers and the screen it puts up is
+ * three screens deep: the list, the pitch behind it, the team select over that.
+ * Inline in the row's handler it could only ever be reached by pressing the row.
+ */
+function enterBlubberball() {
+  hideSealSports();
+  // THE PITCH GOES UP BEHIND THE SCREEN, not the bust — see
+  // enterTeamSelectPitch. Everything the team select decides is a thing you
+  // can now watch happen in the water in front of you.
+  //
+  // ...AND IF IT COULD NOT, THIS LIST COMES BACK. The menu is already down
+  // by the time that call returns false, so it has put the bust up again;
+  // this puts the screen the player actually pressed Blubberball on back
+  // over it, which is where they were a moment ago.
+  if (!enterTeamSelectPitch()) { openSealSports(); return; }
+  showTeamSelect({
+    parent: uiRoot(),
+    // START LEAVES THE TEARDOWN TO THE MATCH. `keep` means "somebody else
+    // is about to take this down": startGame runs resetArena, which runs
+    // resetVersus, which disposes the roster — so doing it here as well is
+    // the same work twice, the second half of it on bodies that have
+    // already gone.
+    onStart: () => { hideRosterPreview({ keep: true }); enterMode(true); },
+    onBack: () => { leaveTeamSelectPitch(); openSealSports(); },
+    // A SEAT ADDED, A COLOUR PICKED, A NAME ROLLED, A HAT CYCLED — the
+    // pitch is re-read on every one of them, which is what makes this a
+    // team select and not a form.
+    onChange: () => rosterPreviewChanged(),
+  });
+}
+
 function openSealSports() {
   showSealSports({
-    onBall: () => {
-      hideSealSports();
-      // THE PITCH GOES UP BEHIND THE SCREEN, not the bust — see
-      // enterTeamSelectPitch. Everything the team select decides is a thing you
-      // can now watch happen in the water in front of you.
-      //
-      // ...AND IF IT COULD NOT, THIS LIST COMES BACK. The menu is already down
-      // by the time that call returns false, so it has put the bust up again;
-      // this puts the screen the player actually pressed Blubberball on back
-      // over it, which is where they were a moment ago.
-      if (!enterTeamSelectPitch()) { openSealSports(); return; }
-      showTeamSelect({
-        parent: uiRoot(),
-        // START LEAVES THE TEARDOWN TO THE MATCH. `keep` means "somebody else
-        // is about to take this down": startGame runs resetArena, which runs
-        // resetVersus, which disposes the roster — so doing it here as well is
-        // the same work twice, the second half of it on bodies that have
-        // already gone.
-        onStart: () => { hideRosterPreview({ keep: true }); enterMode(true); },
-        onBack: () => { leaveTeamSelectPitch(); openSealSports(); },
-        // A SEAT ADDED, A COLOUR PICKED, A NAME ROLLED, A HAT CYCLED — the
-        // pitch is re-read on every one of them, which is what makes this a
-        // team select and not a form.
-        onChange: () => rosterPreviewChanged(),
-      });
-    },
+    onBall: () => enterBlubberball(),
     // SEALITAIRE IS NOT A RUN. Blubberball goes through enterMode and the
     // whole machinery of starting a match; this puts a second renderer on top
     // of the menu and takes it away again, and the menu is never torn down —
@@ -1890,6 +1906,56 @@ function openSealSports() {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// ?ball — THE WORKBENCH'S DOOR STRAIGHT ONTO THE PITCH.
+//
+// A ROUTE TO A SCREEN, and that is the whole distinction from the `?versus`
+// flag this file used to read and deliberately stopped reading (see the note
+// by DEV_UI above). That one switched the MODE and let the arena be rebuilt
+// under it from a query string, which is a run started by a URL; this one
+// presses Blubberball on the Seal sports list for you and stops there, on the
+// team select, with nothing decided. Every seat, colour and whistle after it
+// is the same code the row's own press reaches.
+//
+// It exists because Blubberball is the one game in this repo with no window of
+// its own — Sealitaire has a viewer a button can open, and
+// the pitch is four presses into the game — so the workbench's Games card and
+// the Blubberball Dock button both need an address to send you to. See
+// tools/games.mjs.
+//
+// CONSUMED ONCE. The menu is somewhere the game comes BACK to — Back out of
+// the team select, quit a match — and a flag still in the address bar would
+// slam the door open again every time, with no way out but editing the URL.
+// The param is dropped from the address on the way through for the same
+// reason: what is in the bar should be what a reload gives you.
+let openingRoute = (() => {
+  try {
+    return new URLSearchParams(window.location.search).has('ball') ? 'ball' : '';
+  } catch {
+    return '';
+  }
+})();
+
+function takeOpeningRoute() {
+  const route = openingRoute;
+  openingRoute = '';
+  if (route !== 'ball') return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('ball');
+    window.history.replaceState(null, '', url);
+  } catch {
+    /* No history API — the line above is what stops it firing twice, not this. */
+  }
+  // Through the list rather than straight to enterBlubberball: Back out of the
+  // team select lands on the Seal sports screen either way, so this is where
+  // the screen underneath comes from. A door that leaves you somewhere the
+  // game cannot reach by itself is a door that only works forwards.
+  openSealSports();
+  enterBlubberball();
+}
+
 
 /**
  * The room screen, and the two ways out of it.

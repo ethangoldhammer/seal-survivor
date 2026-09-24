@@ -53,7 +53,7 @@ import { join } from 'node:path';
 import { survey, ROLES, stop as stopPid } from './servers.mjs';
 import { commands, pages, GROUP_ORDER, ROOT } from './hub-catalogue.mjs';
 import { SHIP_SCRIPT, checkMessage, shipArgs, shipState, writeMessage } from './hub-ship.mjs';
-import { tableOpen } from './sealitaire-tune.mjs';
+import { gameState } from './games.mjs';
 
 // The one number in this repo that is allowed to be a constant. PORT is
 // honoured so a second session can run its own hub rather than failing on
@@ -199,10 +199,12 @@ function state() {
     // What the ship card shows before you commit to anything: is there
     // anything to ship, and is this the branch that deploys.
     ship: shipState(ROOT),
-    // Sealitaire has no port, so the socket survey above cannot find it. Ask
-    // the tool that owns the question instead — that way the card and the
-    // `npm run sealitaire` refusal can never disagree about whether one is up.
-    sealitaire: { pid: tableOpen() },
+    // THE GAMES, one row each, from tools/games.mjs. A viewer has no port, so
+    // the socket survey above cannot find it; each row's own tune tool is
+    // asked instead, which is how the card and that tool's `already open`
+    // refusal can never disagree. Blubberball has no pid at all — its row
+    // names the server role the page reads off `servers` below.
+    games: gameState(),
     servers: found.map((p) => ({
       pid: p.pid,
       role: p.role,

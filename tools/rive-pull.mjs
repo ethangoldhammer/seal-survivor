@@ -39,20 +39,37 @@
 // The project defaults to rive/blubberball; `npm run sealitaire:pull` is the
 // same tool with --project rive/sealitaire already on the line.
 //
-// WITH NO .rev ON THE LINE IT ASKS THE EDITOR. The Rive editor app answers an
-// MCP endpoint on localhost, and its export_file tool snapshots the open
-// document — unsaved edits included — as a .rev. That is the only way to get
-// the editor's copy without a save dialog, and it is what makes the pull a
-// button rather than a chore: the workbench (`npm run hub`) runs this with no
-// arguments and gets the diff. Two things the fetch insists on, because
-// each has bitten: the editor must have THIS project's file open (checked
-// against push.fileId in rive.yaml — diffing a different file reports the
-// whole document removed, which reads like a catastrophe), and the sandboxed
-// editor cannot write to our disk, so the bytes come back inline base64 and
-// are written here, to build/editor.rev, where they can be looked at.
+// WHERE THE EDITOR'S COPY COMES FROM: `rive pull`, since CLI 1.1.0. The CLI
+// downloads the linked file itself (rive.yaml's push.fileId) and writes it
+// out as a project — so the editor app does not have to be running, nothing
+// has to be saved by hand, and there is no MCP session to negotiate. This
+// tool pulls into a THROWAWAY directory seeded with nothing but rive.yaml,
+// which is the whole trick: `rive pull` is "the remote wins" and would
+// happily overwrite today's scripts and shaders with whatever was last
+// pushed, so it is never pointed at the real project. The snapshot it writes
+// is read, diffed, and deleted.
+//
+// (It replaces a session against the editor app's own MCP endpoint, which
+// needed the right tab open and returned a .rev inline as base64. A .rev
+// path on the command line still works, for diffing an export off disk.)
 //
 // Without --apply it only reports, and exits 1 if anything differs — so it can
 // gate a build as easily as it can answer "did anyone touch this in the editor".
+//
+// TWO THINGS --apply REFUSES TO DO, both because they happened:
+//
+//   A REFERENCE TO SOMETHING WE DO NOT HAVE. An attribute whose value is an
+//   id (`fontAssetId`, `styleId`, an artboard ref) is only meaningful beside
+//   the element it names. Pull a label whose font was changed in the editor
+//   to a font ADDED there, and the id lands while the <FontAsset> and the
+//   .ttf — an addition, which this refuses to place — do not. The markup then
+//   points at nothing: `fontAssetId="1:9409" matches no id in this file`, the
+//   build fails, and the failure is nowhere near the pull. Those changes are
+//   held back now and reported with the asset they need.
+//
+//   LEAVING A BROKEN TREE. The verify used to run AFTER the write, so a merge
+//   that did not compile exited loudly with the damage already on disk. Every
+//   touched file is snapshotted first and restored if the verify fails.
 // ============================================================================
 
 import { execFileSync } from 'node:child_process';
@@ -61,9 +78,6 @@ import { tmpdir } from 'node:os';
 import { join, resolve, relative } from 'node:path';
 
 const RIVE = process.env.RIVE_CLI || join(process.env.HOME ?? '', '.rive/bin/rive');
-// Where the Rive editor app listens for MCP. The same address ~/.claude.json
-// binds the `rive` server to; the editor picks it, not us.
-const EDITOR_MCP = process.env.RIVE_MCP_URL || 'http://127.0.0.1:9791/mcp';
 
 /** Attributes that are not the editor's to give back. */
 const SKIP = new Set([
@@ -95,91 +109,87 @@ const SKIP = new Set([
  * clutter and the next pull would report them again on every element the
  * .rml still leaves blank.
  */
+/**
+ * id -> the stem of the `file` this element declares, for every *Asset in the
+ * project's markup. `rive inspect` does not report an asset's file (it is our
+ * path on disk, not the document's business), so it is read from the .rml.
+ */
+const assetStem = new Map();
+function readAssetStems(dir) {
+  assetStem.clear();
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.rml')) continue;
+    const text = readFileSync(join(dir, name), 'utf8');
+    for (const m of text.matchAll(/<\w*Asset\b[^>]*>/g)) {
+      const id = /\bid="(\d+:\d+)"/.exec(m[0])?.[1];
+      const file = /\bfile="([^"]+)"/.exec(m[0])?.[1];
+      if (id && file) assetStem.set(id, file.split('/').pop().replace(/\.[^.]+$/, ''));
+    }
+  }
+}
+
 function editorNoise(el, key, from, to) {
   if (key === 'name' && (from ?? '') === '' && to === 'Component') return true;
   if ((key === 'width' || key === 'height') && el.type === 'ImageAsset' && (from ?? 0) === 0) return true;
+  // AN ASSET'S NAME BELONGS TO ITS FILE, and `file` is skipped above, so a
+  // name applied on its own splits the pair. The generated blocks are why
+  // this is not theoretical: the sfx bank and its processed takes number
+  // their <AudioAsset> lines POSITIONALLY, so after either is rebaked 0:1400
+  // means a different sound here than it does in a file pushed before the
+  // bake — and a pull matching on id copied four remote names onto four
+  // unrelated local sounds, leaving `file="sfx/seal-07-distant.flac"
+  // name="hg-cards-034-phaser"` and a bank that no longer resolved. Where
+  // our name IS the file's stem, the file is the truth and the name follows
+  // it, never the export.
+  if (key === 'name' && assetStem.get(el.id) === from) return true;
   return false;
 }
 
 function die(msg) { console.error(`rive-pull: ${msg}`); process.exit(2); }
 
-// ------------------------------------------------------------- editor fetch
+// --------------------------------------------------------------- the remote
 
-/**
- * One JSON-RPC call to the editor's MCP endpoint.
- *
- * A session is three messages, and the middle one is the trap: `initialize`
- * hands back a session id, and then a `notifications/initialized` has to be
- * POSTed before any `tools/call` or the server refuses with "Received
- * tools/call before notifications/initialized". The recipe the editor prints
- * in its own permission-denied error skips that step and fails.
- */
-async function editorSession() {
-  const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
-  let res;
-  try {
-    res = await fetch(EDITOR_MCP, { method: 'POST', headers, body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'rive-pull', version: '1' } },
-    }) });
-  } catch (err) {
-    die(`the Rive editor is not answering at ${EDITOR_MCP} — open the editor app (with the project's file), or pass a .rev on the line\n  ${err.message}`);
-  }
-  if (!res.ok) die(`editor MCP initialize failed: HTTP ${res.status}`);
-  // The editor's server (rive 0.6) issues no session id — it keeps one
-  // initialized state for everyone — but the header is honoured if it ever does.
-  const sid = res.headers.get('mcp-session-id');
-  const h = sid ? { ...headers, 'mcp-session-id': sid } : headers;
-  await fetch(EDITOR_MCP, { method: 'POST', headers: h, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
-
-  let id = 1;
-  return async function call(name, args = {}) {
-    const r = await fetch(EDITOR_MCP, { method: 'POST', headers: h, body: JSON.stringify({
-      jsonrpc: '2.0', id: ++id, method: 'tools/call', params: { name, arguments: args },
-    }) });
-    const raw = await r.text();
-    // Plain JSON on one backend, an SSE frame on the other: take the last data: line.
-    const lines = raw.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim());
-    const body = JSON.parse(lines.length ? lines[lines.length - 1] : raw);
-    if (body.error) die(`editor ${name}: ${body.error.message ?? JSON.stringify(body.error)}`);
-    const text = body.result?.content?.[0]?.text ?? '';
-    if (body.result?.isError) die(`editor ${name}: ${text.split('\n')[0]}`);
-    return JSON.parse(text);
-  };
-}
-
-/** The fileId `rive push` recorded, so the fetch can refuse a different file. */
 function pushedFileId(project) {
   const yaml = readFileSync(join(project, 'rive.yaml'), 'utf8');
   return Number(/^\s*fileId:\s*(\d+)/m.exec(yaml)?.[1] ?? 0);
 }
 
 /**
- * Snapshot the editor's open document to <project>/build/editor.rev.
+ * The linked Rive file, downloaded into a throwaway project.
  *
- * Overwritten every pull on purpose — it is the editor's state at the moment
- * you asked, not a record, and the record is the .rml this writes into.
+ * Seeded with rive.yaml ALONE: `rive pull` reports what it changed against
+ * whatever is already in the directory, so a copy of the project would hide
+ * every difference behind "already matched" — and pointing it at the real
+ * project would overwrite it. An empty seed makes every file it writes the
+ * remote's own, which is exactly the snapshot to diff against.
  */
-async function fetchEditorRev(project) {
-  const call = await editorSession();
-  const info = await call('session_info');
-  const want = pushedFileId(project);
-  const open = info.activeFileId;
-  if (!want) die('rive.yaml has no push.fileId — `rive push` once so the editor and this project are bound');
-  if (open !== want) {
-    die(`the editor's active tab is ${info.activeFileName ?? '?'} (file ${open}), not this project's file ${want} — switch tabs in the editor`);
+function fetchRemote(project, into) {
+  if (!pushedFileId(project)) {
+    die('rive.yaml has no push.fileId — `rive push` once so the project and the file are linked');
   }
-  const out = join(project, 'build');
-  mkdirSync(out, { recursive: true });
-  // destination is required and refused (sandbox) — inline_base64 is the
-  // fallback the tool then takes, and the bytes are written here instead.
-  const payload = await call('export_file', { format: 'rev', destination: out, embed_assets: false, inline_base64: true });
-  const path = join(out, 'editor.rev');
-  if (payload.data) writeFileSync(path, Buffer.from(payload.data, 'base64'));
-  else if (payload.path && existsSync(payload.path)) writeFileSync(path, readFileSync(payload.path));
-  else die(`editor export returned neither bytes nor a file: ${JSON.stringify(payload).slice(0, 200)}`);
-  console.log(`rive-pull  fetched the editor's copy of ${info.activeFileName} → ${relative(process.cwd(), path)}`);
-  return path;
+  mkdirSync(into, { recursive: true });
+  writeFileSync(join(into, 'rive.yaml'), readFileSync(join(project, 'rive.yaml')));
+  // The download crashes now and then on a thread it is waiting on
+  // (`condition_variable wait failed`, out of the CLI's own C++), and a
+  // second go has always worked. A transient crash reading as "the pull tool
+  // is broken" is worse than the wait: try again, and only then give up.
+  let out = '';
+  for (let attempt = 1; ; attempt++) {
+    try {
+      out = execFileSync(RIVE, ['pull', into, '--yes', '--quiet'], { encoding: 'utf8', maxBuffer: 1 << 28 });
+      break;
+    } catch (err) {
+      const why = `${err.stdout ?? ''}${err.stderr ?? err.message}`;
+      if (attempt >= 3) die(`\`rive pull\` failed ${attempt} times:\n${why}`);
+      console.log(`rive-pull  the download crashed, trying again (${attempt}/2)`);
+      rmSync(into, { recursive: true, force: true });
+      mkdirSync(into, { recursive: true });
+      writeFileSync(join(into, 'rive.yaml'), readFileSync(join(project, 'rive.yaml')));
+    }
+  }
+  const line = out.split('\n').find((l) => l.startsWith('pulled file')) ?? '';
+  console.log(`rive-pull  ${line.trim() || 'downloaded the linked file'}`);
+  return into;
 }
 
 function rive(args, cwd) {
@@ -301,17 +311,21 @@ const project = resolve(eq ? eq.slice('--project='.length) : pi >= 0 ? args[pi +
 const positional = args.filter((a, i) => !a.startsWith('--') && i !== pi + 1);
 
 if (!existsSync(join(project, 'rive.yaml'))) die(`not a rive project: ${project}`);
-const rev = positional[0] ? resolve(positional[0]) : await fetchEditorRev(project);
-if (!existsSync(rev)) die(`no such .rev: ${rev}`);
+const rev = positional[0] ? resolve(positional[0]) : null;
+if (rev && !existsSync(rev)) die(`no such .rev: ${rev}`);
 
 const tmp = mkdtempSync(join(tmpdir(), 'rive-pull-'));
 const fresh = join(tmp, 'rt');
 
 try {
-  rive(['create', fresh, `--from-rev=${rev}`]);
+  // A .rev on the line is converted the old way; with nothing on the line the
+  // CLI downloads the linked file itself.
+  if (rev) rive(['create', fresh, `--from-rev=${rev}`]);
+  else fetchRemote(project, fresh);
 
   const mine = inspect(project);
   const theirs = inspect(fresh);
+  readAssetStems(project);
 
   const files = idFileMap(project);
   let added = [...theirs.keys()].filter((id) => !mine.has(id));
@@ -352,7 +366,28 @@ try {
     if (delta.length) changed.push({ id, el, delta });
   }
 
-  console.log(`rive-pull  ${relative(process.cwd(), project)}  ←  ${relative(process.cwd(), rev)}`);
+  // AN ID IS ONLY MEANINGFUL BESIDE THE THING IT NAMES. Split off every
+  // change whose new value points at an element this project does not have:
+  // applying one writes a reference to nothing, and the build fails somewhere
+  // else entirely (see the note at the top). What it wants is an ADDITION,
+  // which this tool does not place, so it is reported with the element it
+  // needs and left for a person.
+  const idRef = /^\d+:\d+$/;
+  const refKey = (k) => /(?:Id|Ids|Ref|Refs)$/.test(k);
+  const dangling = [];
+  for (const c of changed) {
+    c.delta = c.delta.filter((d) => {
+      if (!refKey(d.key)) return true;
+      const targets = String(d.to ?? '').split(/[\s,;-]+/).filter((v) => idRef.test(v));
+      const missing = targets.filter((v) => !mine.has(v));
+      if (!missing.length) return true;
+      dangling.push({ el: c.el, d, missing, wants: missing.map((m) => theirs.get(m)).filter(Boolean) });
+      return false;
+    });
+  }
+  for (let i = changed.length - 1; i >= 0; i--) if (!changed[i].delta.length) changed.splice(i, 1);
+
+  console.log(`rive-pull  ${relative(process.cwd(), project)}  ←  ${rev ? relative(process.cwd(), rev) : `the linked file (${pushedFileId(project)})`}`);
   console.log(`  ${mine.size} elements here, ${theirs.size} in the export\n`);
 
   const housekeeping = [];
@@ -360,8 +395,8 @@ try {
   if (scanned.length) housekeeping.push(`${scanned.length} shader(s) the build scans in`);
   if (housekeeping.length) console.log(`  (ignoring ${housekeeping.join(', ')} — same elements, nothing to do)\n`);
 
-  if (!added.length && !removed.length && !changed.length) {
-    console.log('  nothing changed in the editor — the .rml already says what the .rev does');
+  if (!added.length && !removed.length && !changed.length && !dangling.length) {
+    console.log('  nothing changed in the editor — the .rml already says what the remote does');
     process.exit(0);
   }
 
@@ -379,9 +414,25 @@ try {
     for (const id of removed.slice(0, 40)) console.log(`      ${label(mine.get(id))}`);
     if (removed.length > 40) console.log(`      …and ${removed.length - 40} more`);
   }
+  if (dangling.length) {
+    console.log(`\n  ! ${dangling.length} change(s) POINT AT SOMETHING THIS PROJECT DOES NOT HAVE — not applied:`);
+    for (const g of dangling) {
+      console.log(`      ${label(g.el)}`);
+      console.log(`        ${g.d.key}: ${g.d.from} → ${g.d.to}`);
+      for (const w of g.wants) {
+        const file = w.file ? `, file "${w.file}"` : '';
+        console.log(`        needs ${w.type}${w.name ? ` "${w.name}"` : ''} ${w.id}${file} — add it first, then pull again`);
+      }
+      for (const m of g.missing) if (!g.wants.some((w) => w.id === m)) console.log(`        needs ${m}, which is not in the remote either`);
+    }
+  }
 
   if (!apply) {
     console.log(`\n  run again with --apply to write the ${changed.length} attribute change(s) back`);
+    process.exit(1);
+  }
+  if (!changed.length) {
+    console.log('\n  nothing --apply can write: everything above needs a person');
     process.exit(1);
   }
 
@@ -394,6 +445,13 @@ try {
     if (!byFile.has(file)) byFile.set(file, []);
     byFile.get(file).push(c);
   }
+
+  // THE SNAPSHOT. A merge that does not compile used to exit loudly with the
+  // damage already written, which is how a dangling font reference outlived
+  // the pull that made it. Every file this is about to touch is kept here and
+  // put back if the verify fails.
+  const before = new Map();
+  for (const file of byFile.keys()) before.set(file, readFileSync(join(project, file)));
 
   let written = 0;
   for (const [file, list] of byFile) {
@@ -411,12 +469,20 @@ try {
     console.log(`\n  wrote ${edits.length} change(s) into ${file}`);
   }
 
-  // A merge that does not compile is worse than no merge: say so loudly rather
-  // than leaving a broken tree behind a cheerful summary.
-  rive([project, '--verify']);
+  // A merge that does not compile is worse than no merge: put every file back
+  // and say what it was, rather than leaving a broken tree behind a cheerful
+  // summary — or behind a loud failure, which is just as broken.
+  try {
+    execFileSync(RIVE, [project, '--verify'], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  } catch (err) {
+    for (const [file, bytes] of before) writeFileSync(join(project, file), bytes);
+    const out = `${err.stdout ?? ''}${err.stderr ?? err.message}`;
+    console.error(`\n  the merged project does not verify — every file put back, nothing changed:\n${out.split('\n').filter((l) => /error/.test(l)).slice(0, 8).join('\n')}`);
+    process.exit(2);
+  }
   console.log(`\n  ${written} element(s) updated, and the project still verifies`);
-  if (added.length || removed.length) {
-    console.log('  NOTE: additions and deletions were reported, not applied — see above');
+  if (added.length || removed.length || dangling.length) {
+    console.log('  NOTE: additions, deletions and dangling references were reported, not applied — see above');
     process.exit(1);
   }
 } finally {

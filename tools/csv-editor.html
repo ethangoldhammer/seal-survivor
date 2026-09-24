@@ -69,6 +69,7 @@
   @media (prefers-color-scheme: light) { button.primary { color: #fff; } }
 
   .blurb { flex: none; margin: 0; padding: 12px 16px 4px; color: var(--dim); max-width: 78ch; }
+  .blurb .frozen { color: var(--draft); }
   .status { flex: none; margin: 0; padding: 0 16px 10px; min-height: 20px; color: var(--dim); }
   .status.bad { color: var(--bad); }
   .status.ok { color: var(--ok); }
@@ -175,6 +176,36 @@
   .playbtn[disabled] { color: var(--dim); opacity: .4; cursor: default; background: none; }
 
   /* A cell holding SEVERAL ids: reads as chips, edits as a checklist. */
+  /* A COLOUR CELL, and the square that is the whole point of it. Nobody reads
+     B3061426 as "nearly transparent navy" — the hex is what the file has to
+     hold and the swatch is what says whether it is the colour you meant. Over
+     a checkerboard, because half these values are part transparent and a
+     solid backing would make an alpha of 00 look like the colour at full. */
+  /* A MARKED LINE, the way the game will read it. `{S}esame Bagel.` renders
+     "Sesame Bagel." with the S called out — the braces are markup, so the cell
+     shows the characters and this shows the sentence. */
+  /* THE BRIEF, once the line it asked for is written. */
+  .briefrow { display: flex; align-items: flex-start; gap: 6px; }
+  .briefdone {
+    flex: none; cursor: pointer; font: inherit; font-size: 11px; line-height: 1.5;
+    background: var(--draft); color: #1a1205; border: 0; border-radius: 4px;
+    padding: 2px 7px; white-space: nowrap;
+  }
+  .briefdone:hover { filter: brightness(1.12); }
+  .marked { display: flex; flex-direction: column; gap: 3px; }
+  .marked .reads { font-size: 11px; color: var(--dim); padding-left: 2px; }
+  .marked .reads b { color: var(--dirty); font-weight: 600; }
+  .marked .reads i { color: var(--bad); font-style: normal; }
+  .colorwrap { display: flex; align-items: center; gap: 6px; }
+  .swatch {
+    flex: none; width: 16px; height: 16px; border-radius: 4px;
+    border: 1px solid var(--line);
+    background-image: var(--c, none), repeating-conic-gradient(rgba(128,128,128,0.35) 0% 25%, transparent 0% 50%);
+    background-size: auto, 8px 8px;
+  }
+  /* A value the reader refuses. The square still shows what the game will put
+     on screen instead; the dashed edge is what says the file is wrong. */
+  .swatch.void { border-style: dashed; border-color: var(--bad); }
   .multibtn {
     display: flex; align-items: center; gap: 4px; cursor: pointer;
     width: 100%; text-align: left; overflow: hidden; flex-wrap: nowrap;
@@ -206,6 +237,7 @@
   }
   .multimenu .clear:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--text); }
   .multimenu .unknown { color: var(--bad); }
+  .multimenu input:disabled + span { opacity: 0.4; }
 
   /* A templated cell is the input, a token menu, and the line the card will
      actually read once the placeholders resolve. */
@@ -565,8 +597,17 @@ function renderTabs() {
 
 function renderTable() {
   const t = T();
+  // The blurb, plus — on a table whose rows may not move — the reason the
+  // three buttons that would move them are not there. A control that is
+  // silently absent reads as a bug in the tool.
   $('blurb').textContent = t.blurb;
-  $('addRow').hidden = !t.addRows;
+  if (t.frozenKey) {
+    const why = document.createElement('span');
+    why.className = 'frozen';
+    why.textContent = t.frozenKey;
+    $('blurb').append(' ', why);
+  }
+  $('addRow').hidden = !rowsOpen(t);
   status('');
   renderHead();
   renderBody();
@@ -596,7 +637,7 @@ function renderHead() {
     th.append(makeGrip(c, n));
     tr.append(th);
   });
-  if (T().addRows) {
+  if (rowsOpen(T())) {
     const th = document.createElement('th');
     th.className = 'acts';
     th.title = 'Duplicate or delete a row';
@@ -719,6 +760,22 @@ function visibleRows() {
   return idx;
 }
 
+// May this table's rows be added to, copied or deleted?
+//
+// It used to also ask whether the row ORDER was data — foods.csv indexed
+// paint.bin by row number for a while, so a move slid every block after it
+// onto another food's paint. That file is keyed by name now and a reorder does
+// nothing, so the question went with the format. What replaced it is narrower
+// and lives on the KEY: see keyLocked.
+const rowsOpen = (t) => !!t.addRows;
+
+// WHICH COLUMN A DUPLICATE RENAMES. The LAST key column, not the first, and
+// that is the whole reason this is a function: scatters.csv is keyed on
+// (food, layer), and bumping the first would rename the FOOD — a join — where
+// bumping the last gives that same food another layer, which is what copying
+// one of its rows means.
+const keyName = (t) => t.columns.filter((c) => c.key).map((c) => c.name).pop() ?? 'id';
+
 function renderBody() {
   const t = T();
   const frag = document.createDocumentFragment();
@@ -727,7 +784,7 @@ function renderBody() {
     tr.dataset.row = i;
     tr.classList.toggle('draft', rowIsDraft(t, i));
     t.columns.forEach((c) => tr.append(cellFor(c, i)));
-    if (t.addRows) {
+    if (rowsOpen(t)) {
       const td = document.createElement('td');
       td.className = 'acts';
 
@@ -750,7 +807,7 @@ function renderBody() {
           disarmAll();
           b.dataset.armed = '1';
           b.textContent = 'Delete?';
-          b.title = `Delete "${t.rows[i].id || 'this row'}" — click again`;
+          b.title = `Delete "${t.rows[i][keyName(t)] || 'this row'}" — click again`;
           b.__disarm = setTimeout(() => disarm(b), 4000);
           return;
         }
@@ -767,6 +824,78 @@ function renderBody() {
     frag.append(tr);
   }
   $('tbody').replaceChildren(frag);
+}
+
+// Hex out of the file to something CSS can fill a square with.
+//
+// EIGHT DIGITS ARE AARRGGBB, not RRGGBBAA. That is the order the reading code
+// takes them in, and it is the opposite of CSS's own — swapped, a tile at 7%
+// alpha paints as a solid saturated square, which is exactly the check this
+// swatch exists to be.
+//
+// `digits` is which lengths the column's OWN reader accepts, and it is not
+// cosmetic: states.csv takes six or eight, foods.csv takes six only and reads
+// an eight-digit value as white. A swatch that showed the colour anyway would
+// be a tool agreeing with what you typed instead of with what renders.
+function cssColor(raw, c) {
+  const s = String(raw ?? '').trim().replace(/^#/, '');
+  const ok = (n) => !c?.digits || c.digits.includes(n);
+  if (/^[0-9a-f]{6}$/i.test(s) && ok(6)) return `#${s}`;
+  if (/^[0-9a-f]{8}$/i.test(s) && ok(8)) return `#${s.slice(2)}${s.slice(0, 2)}`;
+  return null;
+}
+
+// A value the column's reader refuses still gets a square — painted with what
+// the GAME falls back to, so the cell is never blank about a colour that is
+// about to be on screen.
+function paintSwatch(sw, raw, c) {
+  const css = cssColor(raw, c) || (String(raw ?? '').trim() ? (c?.voidColor || '#ff00ff') : null);
+  sw.classList.toggle('void', !cssColor(raw, c));
+  sw.style.setProperty('--c', css ? `linear-gradient(${css}, ${css})` : 'none');
+}
+
+// The same split mark.luau does, and it has to stay the same: an unclosed
+// brace is LITERAL (a stray `{` is a typo, and swallowing the rest of the
+// sentence over one is the worst thing either of us could do), and `{}` drops
+// out. Anything this preview showed that the game did not would be worse than
+// no preview.
+function renderMarks(raw) {
+  const esc = (t) => t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const s = String(raw ?? '');
+  let out = '', i = 0, marks = 0;
+  while (i < s.length) {
+    const open = s.indexOf('{', i);
+    if (open < 0) break;
+    const close = s.indexOf('}', open + 1);
+    if (close < 0) break;
+    out += esc(s.slice(i, open));
+    const inner = s.slice(open + 1, close);
+    if (inner) { out += `<b>${esc(inner)}</b>`; marks++; }
+    i = close + 1;
+  }
+  out += esc(s.slice(i));
+  if (!marks) return s.includes('{') ? `${out} <i>— that brace never closes, so it stays in the line</i>` : '';
+  return out;
+}
+
+// Has every copy column on this row actually been written? The brief in
+// `notes` keeps flagging a row after its line is finished — which is correct
+// (a brief is not self-clearing) and is also the one state where the flag says
+// nothing true about the copy. This is what tells them apart.
+function copyWritten(t, i) {
+  const copy = t.columns.filter((c) => c.copy);
+  if (!copy.length) return false;
+  return copy.every((c) => String(t.rows[i][c.name] ?? '').trim() && !isDraft(t.rows[i][c.name]));
+}
+
+// Take the brief out and leave the note. The opening words ARE the flag, so
+// removing them clears it — and everything the brief said about length, or
+// what the card is, or who it is a variation of, is still worth having next to
+// the line it produced. Deleting the cell would throw that away.
+function clearBrief(raw) {
+  return String(raw ?? '')
+    .replace(/^\s*NEEDS YOUR WORDS\b\s*[:\u2014-]*\s*/i, '')
+    .trim();
 }
 
 function cellFor(c, i) {
@@ -856,6 +985,67 @@ function cellFor(c, i) {
     return td;
   }
 
+  // A FINISHED LINE WITH ITS BRIEF STILL OPEN gets one button. The suite
+  // fails on exactly this pair — written copy, open brief — because a brief
+  // cannot clear itself and nothing else was going to notice. It is one click
+  // rather than an automatic sweep because whether a line is finished is a
+  // judgement, and the flag is there to ask for it.
+  if (c.name === 'notes' && hasOpenBrief(t.rows[i][c.name]) && copyWritten(t, i)) {
+    const wrap = document.createElement('div');
+    wrap.className = 'briefrow';
+    const done = document.createElement('button');
+    done.className = 'briefdone';
+    done.textContent = 'brief done';
+    done.title = 'This row\u2019s copy is written but its brief still opens with NEEDS YOUR WORDS, which keeps the row flagged and fails npm test. This takes those words out and keeps the rest of the note.';
+    done.onclick = () => {
+      set(clearBrief(el.value));
+      renderBody();
+    };
+    wrap.append(el, done);
+    td.append(wrap);
+    paint(td, c, i);
+    return td;
+  }
+
+  // A marked column gets the sentence under it. The cell holds the markup and
+  // this holds what a player reads, which are different strings the moment a
+  // brace is involved.
+  if (c.marked) {
+    const wrap = document.createElement('div');
+    wrap.className = 'marked';
+    const reads = document.createElement('div');
+    reads.className = 'reads';
+    // `show`, not `paint`: paint() is the outer dirty/invalid painter and
+    // shadowing it here would make the call two lines down a no-op that looks
+    // exactly like a cell that never marks itself changed.
+    const show = () => {
+      reads.innerHTML = renderMarks(el.value);
+      reads.style.display = reads.innerHTML ? '' : 'none';
+    };
+    el.addEventListener('input', show);
+    show();
+    wrap.append(el, reads);
+    td.append(wrap);
+    paint(td, c, i);
+    return td;
+  }
+
+  // The swatch goes BESIDE the field rather than behind it: the text stays
+  // selectable and typeable, and the colour is legible while you are halfway
+  // through changing it.
+  if (c.type === 'color') {
+    const wrap = document.createElement('div');
+    wrap.className = 'colorwrap';
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    paintSwatch(sw, el.value, c);
+    el.addEventListener('input', () => paintSwatch(sw, el.value, c));
+    wrap.append(sw, el);
+    td.append(wrap);
+    paint(td, c, i);
+    return td;
+  }
+
   td.append(el);
   paint(td, c, i);
   return td;
@@ -929,11 +1119,30 @@ function validate(c, raw) {
     if (c.integer && !Number.isInteger(n)) return `Whole numbers only; the game floors this to ${Math.floor(n)}.`;
     return '';
   }
+  // A colour the reader refuses is not ignored, it is SUBSTITUTED — magenta in
+  // states.csv, white in foods.csv — and a substitution looks deliberate on
+  // screen. So the cell has to say it here, where the digits are still visible.
+  if (c.type === 'color') {
+    if (v === '') return c.blank ? '' : `A blank here draws ${c.voidLabel || 'a fallback colour'}, not nothing.`;
+    if (!cssColor(v, c)) {
+      const want = (c.digits || [6, 8]).join(' or ');
+      return `"${raw}" isn\u2019t ${want} hex digits \u2014 the game draws this ${c.voidLabel || 'as a fallback colour'}.`;
+    }
+    return '';
+  }
   if (c.type === 'multi') {
     // Exactly the warning bossNameTable.js prints at boot, moved to the cell:
     // a part tagged for an archetype that isn't there is loaded, kept, and
     // then never drawn — which is invisible from the file.
-    const bad = splitList(v).filter((id) => !c.options.includes(id));
+    const list = splitList(v, c);
+    // A CAP THAT THE GAME ENFORCES BY DROPPING. scatters.csv reads four
+    // effectors and ignores the rest without a word, so a row can read as
+    // doing five things and do four. The cell has to say which ones are not
+    // happening, because nothing else ever will.
+    if (c.max && list.length > c.max) {
+      return `${list.length} named, and only the first ${c.max} are read — ${list.slice(c.max).join(', ')} ${list.length - c.max === 1 ? 'is' : 'are'} dropped in silence.`;
+    }
+    const bad = list.filter((id) => !c.options.includes(id));
     if (!bad.length) return '';
     return `${bad.join(', ')} — not in ${c.source || 'the list'}, so this part will never appear.`;
   }
@@ -964,7 +1173,8 @@ function addRow() {
 function duplicateRow(i) {
   const t = T();
   const rec = { ...t.rows[i] };
-  if ('id' in rec) rec.id = uniqueId(t, rec.id);
+  const k = keyName(t);
+  if (k in rec) rec[k] = uniqueId(t, rec[k]);
   t.rows.splice(i + 1, 0, rec);
   t.origIndex.splice(i + 1, 0, null);
   renderTabs(); renderBody(); markDirty();
@@ -975,12 +1185,18 @@ function duplicateRow(i) {
 }
 
 function uniqueId(t, base) {
+  const raw = String(base ?? '').trim();
+  const taken = new Set(t.rows.map((r) => String(r[keyName(t)] ?? '').trim()));
+  // A NUMBERED KEY COUNTS. scatters.csv's `layer` is 1, 2, 3, and `1Copy` is
+  // not a layer — it is a row the parser reads as layer 0 and draws under
+  // everything. The next free number is what duplicating layer 2 means.
+  if (/^-?\d+$/.test(raw)) {
+    for (let n = Number(raw) + 1; ; n++) if (!taken.has(String(n))) return String(n);
+  }
   // A copy of a copy counts up rather than stacking the word: duplicating
   // `squiddedCopy` gives `squiddedCopy2`, not `squiddedCopyCopy`.
-  const raw = String(base ?? '').trim();
   const stem = raw.replace(/Copy\d*$/, '') || raw;
   if (!stem) return '';
-  const taken = new Set(t.rows.map((r) => String(r.id ?? '').trim()));
   let id = `${stem}Copy`;
   for (let n = 2; taken.has(id); n++) id = `${stem}Copy${n}`;
   return id;
@@ -1112,13 +1328,22 @@ function disarmAll() { document.querySelectorAll('.rowdel[data-armed]').forEach(
 // writes back the single space bossNameTable.js canonicalises on, and it can
 // only write ids that exist.
 
-const splitList = (raw) => String(raw ?? '').trim().split(/[\s,]+/).filter(Boolean);
+// A multi cell's ids. `sep` is the ONE character the game's own parser splits
+// on — `|` for sfxEvents.csv's takes — and it is accepted on input alongside
+// whitespace and commas so a cell typed either way still reads. It is what the
+// menu WRITES with, which is the half that matters: a list joined with spaces
+// into a column the parser splits on pipes is one take, named after all of
+// them, and the warning it prints names an id nobody typed.
+const splitList = (raw, c) => {
+  const sep = c?.sep ? c.sep.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+  return String(raw ?? '').trim().split(new RegExp(`[\\s,${sep}]+`)).filter(Boolean);
+};
 
 // Two chips and a count. The column is narrow and the popover is where "which
 // ones exactly" gets answered; what the cell has to say at a glance is whether
 // this part is narrowed at all, and roughly how far.
 function paintMulti(btn, c, raw) {
-  const ids = splitList(raw);
+  const ids = splitList(raw, c);
   btn.innerHTML = '';
   if (!ids.length) {
     const any = document.createElement('span');
@@ -1143,7 +1368,7 @@ function paintMulti(btn, c, raw) {
 
 function openMulti(anchor, c, i, set) {
   document.querySelector('.multimenu')?.remove();
-  const chosen = new Set(splitList(T().rows[i][c.name]));
+  const chosen = new Set(splitList(T().rows[i][c.name], c));
   // An id already in the cell that the list doesn't offer — a renamed or
   // deleted archetype — still gets a row. It has to be visible to be
   // unchecked, and a picker that silently dropped it on the first click would
@@ -1156,9 +1381,18 @@ function openMulti(anchor, c, i, set) {
   const write = () => {
     // Written in ROSTER order rather than click order, so two rows tagged for
     // the same pair read identically in the file and in the diff.
-    const out = [...c.options, ...extra].filter((id) => chosen.has(id)).join(' ');
+    const out = [...c.options, ...extra].filter((id) => chosen.has(id)).join(c.sep || ' ');
     set(out);
     paintMulti(anchor, c, out);
+  };
+
+  // At the cap, everything unticked greys out rather than letting you add a
+  // fifth and find out from a red cell. Ticked ones stay live, so swapping one
+  // for another is untick-then-tick and not a puzzle.
+  const capped = () => !!c.max && chosen.size >= c.max;
+  const boxes = [];
+  const recap = () => {
+    for (const [id, box] of boxes) box.disabled = capped() && !chosen.has(id);
   };
 
   for (const id of [...c.options, ...extra]) {
@@ -1166,7 +1400,8 @@ function openMulti(anchor, c, i, set) {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = chosen.has(id);
-    box.onchange = () => { box.checked ? chosen.add(id) : chosen.delete(id); write(); };
+    boxes.push([id, box]);
+    box.onchange = () => { box.checked ? chosen.add(id) : chosen.delete(id); write(); recap(); };
     const nm = document.createElement('span');
     // Labelled in the list, bare in the cell: "crab — a crab" is what you need
     // while choosing and noise once chosen.
@@ -1190,8 +1425,10 @@ function openMulti(anchor, c, i, set) {
     chosen.clear();
     menu.querySelectorAll('input').forEach((b) => { b.checked = false; });
     write();
+    recap();
   };
   menu.append(sep, clear);
+  recap();
 
   // Stays open across clicks: picking more than one is the entire point, and a
   // menu that closed on the first tick would make the second one a re-open.

@@ -8,6 +8,7 @@ local KNOCK = require('knock')
 local BSPRING = require('bonespring')
 local HOVER = require('hover')
 local REACT = require('react')
+local CASCADE = require('cascade')
 local PUPPET = require('puppet')
 local BUB = require('bubbles')
 
@@ -1380,6 +1381,93 @@ return function(): Tests
                     expect(math.abs(cosBetween(ux, uy, uz, vx, vy, vz))).lessThan(0.5)
                 end
             end)
+            test.case('the number is a grid, whichever fish is the long one', function(expect)
+                -- A school's bodies are scattered +-15% in length, and the
+                -- formation used to be measured from EACH body's own: a short
+                -- fish sat further out than the long one beside it, so no
+                -- column was straight and no row was level. The drop made it
+                -- worse — its room was per body too, so each fish fell its own
+                -- distance and the rows sheared apart. Six fish came to rest
+                -- with the top row 0.155 apart, a tenth of the card's height.
+                --
+                -- Two assertions, because either alone passes something wrong.
+                -- The grid must MIRROR (a formation is symmetric about the
+                -- card's centre line)...
+                local function restOf(n: number, size: number, drop: number, gap: number, seed: number): ({ number }, { number })
+                    local inp = inputs(n, size)
+                    inp.sway = 0
+                    inp.drop = drop
+                    inp.rowGap = gap
+                    local b = BAIT.new(seed)
+                    for _ = 1, 900 do
+                        BAIT.update(b, 1 / 60, inp)
+                    end
+                    local xs, ys = {}, {}
+                    for i = 1, n do
+                        table.insert(xs, b.fish[i].x)
+                        table.insert(ys, b.fish[i].y)
+                    end
+                    return xs, ys
+                end
+                for _, c in ipairs({ { 6, 0.4, 0.8 }, { 7, 0.4, 0 }, { 9, 0.5, 0.3 }, { 10, 0.45, 0 } }) do
+                    local n, size, drop = c[1], c[2], c[3]
+                    local xs, ys = restOf(n, size, drop, 1, 4)
+                    for i = 1, n do
+                        -- every body has a partner across the centre line, on
+                        -- its own row: the pair (x, y) and (-x, y)
+                        local found = false
+                        for j = 1, n do
+                            if math.abs(xs[i] + xs[j]) < 0.004 and math.abs(ys[i] - ys[j]) < 0.004 then
+                                found = true
+                                break
+                            end
+                        end
+                        expect(found).is(true)
+                    end
+                    -- ...and it must not depend on the length scatter at all.
+                    -- A different seed deals different lengths; the number it
+                    -- makes is the same number, to the pixel.
+                    local xs2, ys2 = restOf(n, size, drop, 1, 17)
+                    for i = 1, n do
+                        expect(math.abs(xs[i] - xs2[i])).lessThan(0.004)
+                        expect(math.abs(ys[i] - ys2[i])).lessThan(0.004)
+                    end
+                end
+            end)
+            test.case('the seven puts its double gap at the bottom, where a seven has it', function(expect)
+                -- A seven is the one count with an odd pip off the centre, so
+                -- one of its gaps is twice the others — that IS the shape of a
+                -- seven, and it belongs between the middle and bottom rows.
+                -- Row -1 is the card's BOTTOM (world +y is up), and the odd
+                -- pip was at -0.5, which put the double gap at the TOP: the
+                -- seven was printed upside down.
+                local inp = inputs(7, 0.40355)
+                inp.sway = 0
+                local b = BAIT.new(4)
+                for _ = 1, 900 do
+                    BAIT.update(b, 1 / 60, inp)
+                end
+                local ys = {}
+                for i = 1, 7 do
+                    table.insert(ys, b.fish[i].y)
+                end
+                table.sort(ys)
+                -- four rows, bottom to top: two, two, the odd one, two
+                local rows = {}
+                for _, y in ipairs(ys) do
+                    if #rows == 0 or math.abs(y - rows[#rows]) > 0.01 then
+                        table.insert(rows, y)
+                    end
+                end
+                expect(#rows).is(4)
+                -- the gap off the bottom is the double one, and the three
+                -- above it are even
+                local low = rows[2] - rows[1]
+                expect(math.abs((rows[3] - rows[2]) - (rows[4] - rows[3]))).lessThan(0.01)
+                expect(low).greaterThan((rows[3] - rows[2]) * 1.8)
+                -- and the odd pip is the one alone on its row, above centre
+                expect(rows[3]).greaterThan(0)
+            end)
             test.case('drop moves the whole number, bottom row included', function(expect)
                 -- Row spacing must survive a drop: the formation shifts as one,
                 -- and past the room it has it stops as one. A per-seat clamp
@@ -1747,6 +1835,169 @@ return function(): Tests
             end)
         end)
 
+        test.group('the cascade', function()
+            local function inputs(): CASCADE.Inputs
+                return {
+                    w = 1600, h = 1000, cw = 120, ch = 168, fit = 1,
+                    gravity = 1400, launch = 260, lift = 190, bounce = 0.72,
+                    gap = 0.13, spin = 1.6, floor = 10, restSpeed = 90,
+                }
+            end
+            -- Four foundations, thirteen each, ace at the bottom as they sit.
+            local function piles(): { { number } }
+                local out = {}
+                for s = 1, 4 do
+                    local p = {}
+                    for r = 1, 13 do
+                        table.insert(p, (s - 1) * 13 + r)
+                    end
+                    table.insert(out, p)
+                end
+                return out
+            end
+            local FROM = { { x = 700, y = 200 }, { x = 840, y = 200 }, { x = 980, y = 200 }, { x = 1120, y = 200 } }
+
+            test.case('the piles empty a card at a time, in turn, top card first', function(expect)
+                local order = CASCADE.order(piles())
+                expect(#order).is(52)
+                -- the first four are each pile's TOP card (the king)
+                for i = 1, 4 do
+                    expect(order[i].pile).is(i)
+                    expect(order[i].id).is((i - 1) * 13 + 13)
+                end
+                -- and the round after takes the queens, in the same rotation
+                for i = 5, 8 do
+                    expect(order[i].pile).is(i - 4)
+                    expect(order[i].id).is((i - 5) * 13 + 12)
+                end
+                -- every card exactly once
+                local seen = {}
+                for _, o in ipairs(order) do
+                    expect(seen[o.id]).is(nil)
+                    seen[o.id] = true
+                end
+            end)
+
+            test.case('a short pile runs out without stalling the others', function(expect)
+                local order = CASCADE.order({ { 1 }, { 2, 3, 4 }, {}, { 5, 6 } })
+                expect(#order).is(6)
+                local ids = {}
+                for _, o in ipairs(order) do
+                    table.insert(ids, o.id)
+                end
+                expect(table.concat(ids, ',')).is('1,4,6,3,5,2')
+            end)
+
+            test.case('the cards leave on the clock, not the frame rate', function(expect)
+                local inp = inputs()
+                local s = CASCADE.new(CASCADE.order(piles()), FROM)
+                -- one long frame owes several cards and launches all of them
+                CASCADE.update(s, 0.5, inp)
+                expect(s.next - 1).is(math.floor(0.5 / inp.gap) + 1)
+                local live = 0
+                for _, c in ipairs(s.cards) do
+                    if c.live then live += 1 end
+                end
+                expect(live).is(s.next - 1)
+            end)
+
+            test.case('a card bounces off the floor, lower each time, and never through it', function(expect)
+                local inp = inputs()
+                local s = CASCADE.new(CASCADE.order({ { 7 } }), { { x = 800, y = 200 } })
+                local c = s.cards[1]
+                local floorY = inp.h - inp.floor - inp.ch * 0.5
+                local peaks, rising = {}, false
+                local prevY = c.y
+                for _ = 1, 600 do
+                    CASCADE.update(s, 1 / 120, inp)
+                    if not c.live and c.gone then break end
+                    expect(c.y <= floorY + 0.001).is(true)
+                    -- a peak is where it stops rising
+                    if c.y > prevY and rising then
+                        table.insert(peaks, prevY)
+                        rising = false
+                    elseif c.y < prevY then
+                        rising = true
+                    end
+                    prevY = c.y
+                end
+                expect(c.bounces >= 2).is(true)
+                -- each arc peaks lower than the one before (a bigger y is lower)
+                for i = 2, #peaks do
+                    expect(peaks[i] >= peaks[i - 1] - 0.001).is(true)
+                end
+            end)
+
+            test.case('every card ends up off the screen, and the cascade reports itself done', function(expect)
+                local inp = inputs()
+                local s = CASCADE.new(CASCADE.order(piles()), FROM)
+                expect(CASCADE.done(s)).is(false)
+                local t = 0
+                while t < 60 and not CASCADE.done(s) do
+                    CASCADE.update(s, 1 / 60, inp)
+                    t += 1 / 60
+                end
+                expect(CASCADE.done(s)).is(true)
+                for _, c in ipairs(s.cards) do
+                    expect(c.gone).is(true)
+                    expect(c.x < -inp.cw or c.x > inp.w + inp.cw).is(true)
+                end
+            end)
+
+            test.case('the throw goes both ways off a pile', function(expect)
+                local inp = inputs()
+                local s = CASCADE.new(CASCADE.order(piles()), FROM)
+                for _ = 1, 60 do
+                    CASCADE.update(s, 1 / 60, inp)
+                end
+                local left, right = 0, 0
+                for _, c in ipairs(s.cards) do
+                    if c.live then
+                        if c.vx < 0 then left += 1 else right += 1 end
+                    end
+                end
+                expect(left > 0).is(true)
+                expect(right > 0).is(true)
+            end)
+
+            test.case('it is deterministic: the same trigger twice is the same cascade', function(expect)
+                local inp = inputs()
+                local function run(): string
+                    local s = CASCADE.new(CASCADE.order(piles()), FROM)
+                    for _ = 1, 200 do
+                        CASCADE.update(s, 1 / 60, inp)
+                    end
+                    local out = {}
+                    for _, c in ipairs(s.cards) do
+                        table.insert(out, `{string.format('%.4f', c.x)},{string.format('%.4f', c.y)}`)
+                    end
+                    return table.concat(out, ' ')
+                end
+                expect(run()).is(run())
+            end)
+
+            test.case('a dead bounce stops bouncing instead of sliding along the floor', function(expect)
+                local inp = inputs()
+                inp.bounce = 0.1
+                local s = CASCADE.new(CASCADE.order({ { 9 } }), { { x = 800, y = 200 } })
+                local c = s.cards[1]
+                for _ = 1, 2000 do
+                    CASCADE.update(s, 1 / 120, inp)
+                    if c.gone then break end
+                end
+                expect(c.gone).is(true)
+                -- it stopped REPORTING bounces long before it left: a hit
+                -- under restSpeed is a card settling, not a bounce.
+                local reported = 0
+                local s2 = CASCADE.new(CASCADE.order({ { 9 } }), { { x = 800, y = 200 } })
+                for _ = 1, 2000 do
+                    CASCADE.update(s2, 1 / 120, inp)
+                    reported += #s2.hits
+                    if s2.cards[1].gone then break end
+                end
+                expect(reported < 6).is(true)
+            end)
+        end)
         test.group('reactions', function()
             local TAU = math.pi * 2
             local function nearTurn(a: number): boolean
@@ -2015,31 +2266,6 @@ return function(): Tests
                 expect(rings >= 2).is(true)
             end)
 
-            test.case('only one track is ever playing', function(expect)
-                -- The rule the loop is built on. The runtime's audio globals
-                -- cannot be stood up in --test, so this drives the DECISION
-                -- rather than the playing. Each line is a bug that shipped.
-                local G = MUSIC.RESTART_GAP
-                -- Nothing playing: start.
-                expect(MUSIC.mayStart(false, false, 0, -1000)).is(true)
-                -- Playing and not finished: never, however long it has been.
-                expect(MUSIC.mayStart(true, false, 500, 0)).is(false)
-                -- Finished, and a good while since it started: loop.
-                expect(MUSIC.mayStart(true, true, 61, 0)).is(true)
-                -- Finished a frame after starting, which is what a handle to
-                -- a sound somebody else stopped says. Refused — this is the
-                -- one that machine-guns, a new voice every advance and not
-                -- one of them stopped.
-                expect(MUSIC.mayStart(true, true, 1 / 120, 0)).is(false)
-                -- And refused right up to the gap, not approximately.
-                expect(MUSIC.mayStart(true, true, G - 0.001, 0)).is(false)
-                expect(MUSIC.mayStart(true, true, G, 0)).is(true)
-                -- A failed start (no device) may be retried, but only at the
-                -- same rate, or a deviceless run asks 120 times a second.
-                expect(MUSIC.mayStart(false, false, 0.5, 0)).is(false)
-                expect(MUSIC.mayStart(false, false, G, 0)).is(true)
-            end)
-
             test.case('a quiet passage does not ring', function(expect)
                 -- Flux well under the threshold for ten seconds. The bands
                 -- are normalised against the track's OWN quiet, so a soft
@@ -2206,55 +2432,52 @@ return function(): Tests
                 expect(MUSIC.bedFor({ loop('x', 0, 1, BED, FOUND, 5) }, prog(0, 0, 0, 0, 0))).is(0)
             end)
 
-            test.case('the wrap carries the overshoot, so the grid never slips', function(expect)
-                local bar = 2.553191
-                local a = loop('a', 10, 20, BED, OPEN, 0)
-                local b = loop('b', 100, 110, BED, OPEN, 0)
-                -- Read a frame late: 8ms past the end. The new region starts
-                -- 8ms in, so the downbeat lands exactly when it would have.
-                local at = MUSIC.wrapTo(20.008, a, b, bar)
-                expect(math.abs(at - 100.008) < 1e-6).is(true)
-                -- Dead on the boundary carries nothing.
-                expect(MUSIC.wrapTo(20, a, b, bar)).is(100)
-                -- A stalled frame — a reload, a long GC — would carry past
-                -- the new region's first downbeat, so it carries nothing
-                -- instead. A late start is recoverable; a skipped bar is not.
-                expect(MUSIC.wrapTo(24, a, b, bar)).is(100)
-                -- And a playhead BEFORE the end (the sound was restarted
-                -- under us) never carries a negative.
-                expect(MUSIC.wrapTo(0, a, b, bar)).is(100)
-            end)
-
-            -- A stand-in for the one thing `follow` touches: a playhead that
-            -- can be read, seeked and asked whether it has finished. This is
-            -- what makes the transport runnable at all under --test.
-            local function fakeSound(at: number)
-                local s = { t = at, seeks = {}, done = false }
-                function s.time(_self): number return s.t end
-                function s.completed(_self): boolean return s.done end
-                function s.seek(_self, to: number)
-                    s.t = to
-                    table.insert(s.seeks, to)
-                end
-                return s
+            -- A stand-in for the audio engine: one asset in, something with
+            -- `completed`, `stop` and `volume` out. That is the entire
+            -- surface the transport uses, which is the point of keeping it
+            -- that small.
+            --
+            -- `time()` is deliberately NOT provided. If anything in the
+            -- driver ever reaches for the audio clock again this stops
+            -- compiling here rather than working in tests and wedging in the
+            -- player, which is what happened the last two times.
+            local played: { string } = {}
+            local function fakeEngine(srcName: string)
+                local snd = { done = false, stopped = false, volume = 0 }
+                function snd.completed(_self): boolean return snd.done end
+                function snd.stop(_self, _fade: number?) snd.stopped = true end
+                return snd
             end
 
-            local function withLoops(rows: { MUSIC.Loop }, barSeconds: number): MUSIC.Music
+            local live: any = nil
+            local function installEngine()
+                played = {}
+                MUSIC.setPlayer(function(src: any): any
+                    table.insert(played, tostring(src))
+                    live = fakeEngine(tostring(src))
+                    return live
+                end)
+            end
+
+            -- A region's asset stands in as its id, so `played` reads as the
+            -- sequence of loops the table actually put on.
+            local function withAssets(rows: { MUSIC.Loop }, barSeconds: number): MUSIC.Music
                 local m = MUSIC.new()
                 assert(MUSIC.parse(m, bakeBytes(1, 60, 60, barSeconds, rows, function(): (number, number)
                     return 0.5, 0.0
                 end)), 'the loop bake did not parse')
+                for _, l in ipairs(m.loops) do
+                    l.src = (l.id :: any)
+                end
                 MUSIC.resetTransport()
+                installEngine()
                 return m
             end
 
-            -- A 2.5s bar, so a block is four bars and TEN SECONDS. The beds
-            -- are several blocks long on purpose: the first version of these
-            -- rows made every region exactly one block, which put the block
-            -- line and the phrase end at the same instant and let the
-            -- escalation case below pass whichever one the code actually
-            -- waited for. The three quanta have to be three different times
-            -- or none of this is measuring anything.
+            -- 2.5s bar, so a block is four bars and TEN SECONDS. The beds are
+            -- several blocks long on purpose: with one-block regions the
+            -- block line and the region end fall at the same instant and an
+            -- escalation case passes whichever one the code waited for.
             --
             --   bar 2.5s | block 10s | deal 60s, drift 40s, loud 40s
             local ROWS = {
@@ -2265,341 +2488,180 @@ return function(): Tests
                 loop('win', 150, 160, WIN, OPEN, 0),
             }
 
-            test.case('the first frame lands on the intro, wherever the sound was', function(expect)
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 100)
-                expect(#s.seeks).is(1)
-                expect(s.seeks[1]).is(0)
-                expect(MUSIC.playingIndex()).is(1)
-                -- A sound that had already run on (a hot reload, a second
-                -- table) is pulled back to the region, not left where it was.
-                local m2 = withLoops(ROWS, 2.5)
-                local s2 = fakeSound(137.4)
-                MUSIC.follow(m2, s2, prog(1, 0, 0, 0, 0), 100)
-                expect(s2.seeks[1]).is(0)
-            end)
-
-            test.case('the intro hands over to the bottom rung', function(expect)
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local now = 100
-                local function frame(t: number, p: MUSIC.Progress)
-                    s.t = t
-                    now += 1
-                    MUSIC.follow(m, s, p, now)
+            -- Run the driver at 120Hz for `seconds`, with the fake sound
+            -- finishing exactly when its region's length is up — which is
+            -- what a real one does and the only thing the transport asks of
+            -- it.
+            local function play(m: MUSIC.Music, seconds: number, p: MUSIC.Progress)
+                local dt = 1 / 120
+                for _ = 1, math.floor(seconds * 120) do
+                    local cur = MUSIC.currentLoop(m)
+                    if cur ~= nil and live ~= nil and MUSIC.elapsedIn() + dt >= cur.endSec - cur.startSec then
+                        live.done = true
+                    end
+                    MUSIC.drive(m, dt, 1.0, p)
                 end
-                frame(0, prog(1, 0, 0, 0, 0))          -- placed on the intro
+            end
+
+            test.case('it starts on the intro and hands to the bottom rung', function(expect)
+                local m = withAssets(ROWS, 2.5)
+                play(m, 1, prog(1, 0, 0, 0, 0))
                 expect(MUSIC.playingIndex()).is(1)
-                frame(10, prog(1, 0, 0, 0, 0))         -- the intro runs out
+                expect(#played).is(1)
+                expect(played[1]).is('open')
+                play(m, 10, prog(1, 0, 0, 0, 0))
                 expect(MUSIC.playingIndex()).is(2)
-                expect(s.t).is(10)                      -- `deal` starts at 10
-                -- Nothing else unlocked, so it repeats rather than falling
-                -- silent or walking into a locked region.
-                frame(70, prog(1, 0, 0, 0, 0))
-                expect(MUSIC.playingIndex()).is(2)
-                expect(s.t).is(10)
+                expect(played[2]).is('deal')
             end)
 
-            test.case('a section loops until the next one is ungated', function(expect)
+            test.case('a region loops until the next one is ungated', function(expect)
                 -- The whole of "loop the main bed until ten cards are up".
-                -- Three passes of a sixty-second phrase with nine cards on
-                -- the foundations, and it is still the main bed.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local now = 100
-                local function frame(t: number, p: MUSIC.Progress)
-                    s.t = t
-                    now += 1
-                    MUSIC.follow(m, s, p, now)
-                end
-                frame(0, prog(1, 0, 0, 0, 0))
-                frame(10, prog(1, 0, 0, 0, 0))
-                local nine = prog(1, 0, 9, 0, 0)
-                for _ = 1, 3 do
-                    frame(35, nine)
-                    expect(MUSIC.playingIndex()).is(2)
-                    frame(70, nine)                  -- the phrase runs out
-                    expect(MUSIC.playingIndex()).is(2)
-                    expect(s.t).is(10)               -- and starts again
-                end
-                -- Nine is not ten. Nothing has been queued in all that time.
+                -- `deal` is sixty seconds; three minutes at nine cards is
+                -- three more plays of it and nothing else.
+                local m = withAssets(ROWS, 2.5)
+                play(m, 11, prog(1, 0, 0, 0, 0))
+                expect(MUSIC.playingIndex()).is(2)
+                play(m, 185, prog(1, 0, 9, 0, 0))
+                expect(MUSIC.playingIndex()).is(2)
                 expect(MUSIC.queuedIndex()).is(0)
+                -- open, then deal, then deal again three times over.
+                expect(#played).is(5)
+                for k = 2, 5 do
+                    expect(played[k]).is('deal')
+                end
             end)
 
-            test.case('an escalation lands on the next block, not the next phrase', function(expect)
-                -- THE TWO TIMES ARE FIFTY SECONDS APART HERE, which is the
-                -- point: `deal` runs 10 to 70, and a change noticed at 32
-                -- lands at the block line at 40 — not at 70, and not at the
-                -- next bar at 32.5.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local now = 100
-                local function frame(t: number, p: MUSIC.Progress)
-                    s.t = t
-                    now += 1
-                    MUSIC.follow(m, s, p, now)
-                end
-                frame(0, prog(1, 0, 0, 0, 0))
-                frame(10, prog(1, 0, 0, 0, 0))
+            test.case('an escalation lands on the next block, not the next region', function(expect)
+                -- THE TWO TIMES ARE FIFTY SECONDS APART. `deal` runs sixty
+                -- seconds; ten cards arriving twenty-two seconds in lands at
+                -- the block line at thirty, not at the region's end.
+                local m = withAssets(ROWS, 2.5)
+                play(m, 11, prog(1, 0, 0, 0, 0))
                 expect(MUSIC.playingIndex()).is(2)
-                -- Nine cards is not enough; ten is.
-                frame(31, prog(1, 0, 9, 0, 0))
+                play(m, 12, prog(1, 0, 9, 0, 0))
                 expect(MUSIC.queuedIndex()).is(0)
-                frame(32, prog(1, 0, 10, 0, 0))
+                -- Ten cards, twenty-two seconds into `deal`.
+                play(m, 1, prog(1, 0, 10, 0, 0))
                 expect(MUSIC.queuedIndex()).is(3)
-                -- NOT at the next bar. 32.5, 35 and 37.5 are all bar lines
-                -- and none of them is a block line.
-                frame(32.6, prog(1, 0, 10, 0, 0))
+                -- Not at the next bar: 25 and 27.5 are bar lines.
+                play(m, 5, prog(1, 0, 10, 0, 0))
                 expect(MUSIC.playingIndex()).is(2)
-                frame(37.6, prog(1, 0, 10, 0, 0))
-                expect(MUSIC.playingIndex()).is(2)
-                -- At the block line, ten seconds at most after the card.
-                frame(40.1, prog(1, 0, 10, 0, 0))
+                -- At the block line, within ten seconds of the card.
+                play(m, 3, prog(1, 0, 10, 0, 0))
                 expect(MUSIC.playingIndex()).is(3)
-                expect(s.t).is(70)
-                -- And NOT at the phrase end, thirty seconds later, which is
-                -- what the version of this test with one-block regions could
-                -- not tell apart.
+                expect(played[#played]).is('drift')
             end)
 
             test.case('the ladder does not come back down inside a deal', function(expect)
                 -- Klondike lets you pull the top card back off a foundation,
                 -- and the stock recycle costs score. Without a latch the
-                -- music would drop a rung when you undo a card, four bars
-                -- later, for no reason the player can connect to anything.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local now = 100
-                local function frame(t: number, p: MUSIC.Progress)
-                    s.t = t
-                    now += 1
-                    MUSIC.follow(m, s, p, now)
-                end
-                frame(0, prog(1, 0, 0, 0, 0))
-                frame(10, prog(1, 0, 0, 0, 0))
-                frame(32, prog(1, 0, 26, 0, 0))
-                frame(40.1, prog(1, 0, 26, 0, 0))
-                expect(MUSIC.playingIndex()).is(4)      -- the loud one
-                -- Two cards come back off. The count says `drift` now.
-                expect(MUSIC.bedFor(ROWS, prog(1, 0, 24, 0, 0))).is(3)
-                -- The music does not care.
-                frame(112, prog(1, 0, 24, 0, 0))
-                frame(120.1, prog(1, 0, 24, 0, 0))
+                -- music drops a rung when you undo a card, for no reason the
+                -- player can connect to anything.
+                local m = withAssets(ROWS, 2.5)
+                play(m, 11, prog(1, 0, 0, 0, 0))
+                play(m, 15, prog(1, 0, 26, 0, 0))
                 expect(MUSIC.playingIndex()).is(4)
-                expect(MUSIC.queuedIndex()).is(0)
-                -- A new deal is the only thing that lets go of the rung.
+                expect(MUSIC.bedFor(ROWS, prog(1, 0, 24, 0, 0))).is(3)
+                play(m, 30, prog(1, 0, 24, 0, 0))
+                expect(MUSIC.playingIndex()).is(4)
+                -- Only a new deal lets go of the rung.
                 MUSIC.noteDeal(m, 0, 0, 0)
-                frame(122.6, prog(2, 0, 0, 0, 0))
-                expect(MUSIC.playingIndex()).is(1)      -- the intro
-                frame(10, prog(2, 0, 0, 0, 0))
-                expect(MUSIC.playingIndex()).is(2)      -- the bottom rung
+                play(m, 5, prog(2, 0, 0, 0, 0))
+                expect(MUSIC.playingIndex()).is(1)
+                play(m, 11, prog(2, 0, 0, 0, 0))
+                expect(MUSIC.playingIndex()).is(2)
             end)
 
-            test.case('a win takes over at the next bar, not at the next phrase', function(expect)
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local now = 100
-                local function frame(t: number)
-                    s.t = t
-                    now += 1
-                    MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), now)
-                end
-                frame(0)
-                frame(10)
-                expect(MUSIC.playingIndex()).is(2)      -- on `deal`, 10 to 70
+            test.case('a win takes over at the next bar and then holds', function(expect)
+                local m = withAssets(ROWS, 2.5)
+                play(m, 11, prog(1, 0, 0, 0, 0))
+                expect(MUSIC.playingIndex()).is(2)      -- `deal`, sixty long
                 MUSIC.noteWin(m, 52, 0, 0)
                 expect(MUSIC.queuedIndex()).is(5)
-                -- Mid-bar: nothing yet. The bars are the file's, so 11.0 and
-                -- 11.4 are both inside bar 4 (10.0-12.5).
-                frame(11.4)
-                expect(MUSIC.playingIndex()).is(2)
-                -- Across 12.5 and it goes, eight bars before `deal` would
-                -- have ended on its own.
-                frame(12.6)
+                play(m, 3, prog(1, 1, 52, 0, 0))
+                expect(MUSIC.playingIndex()).is(5)      -- within a bar
+                expect(played[#played]).is('win')
+                local upTo = #played
+                -- AND IT HOLDS. A foundation count of 52 would otherwise put
+                -- it straight onto the loud bed; it plays the win region
+                -- over and over instead, because the deal is over.
+                play(m, 60, prog(1, 1, 52, 0, 0))
                 expect(MUSIC.playingIndex()).is(5)
-                expect(s.t).is(150)
+                for k = upTo, #played do
+                    expect(played[k]).is('win')
+                end
             end)
 
-            test.case('a win is queued once, not on every frame it is still won', function(expect)
-                -- The bug this is written against: reading `game.won` per
-                -- frame instead of on the edge. The queue would be re-armed
-                -- every frame, the bar test would always see a fresh queue,
-                -- and the win loop would restart from its first bar forever.
+            test.case('a sound that claims to be finished early is not believed', function(expect)
+                -- THE MACHINE-GUN. A handle to a sound somebody else stopped
+                -- answers `completed` yes having played nothing. At a
+                -- hundred and twenty advances a second, believing it starts
+                -- a new voice every frame.
                 --
-                -- The playhead ADVANCES here rather than being set: once the
-                -- win loop is playing, a test that keeps writing absolute
-                -- times from the old region would be re-seeking it itself
-                -- and would report the bug whether or not it existed.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local now = 100
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), now)
+                -- The region's length is known exactly, so the clock decides
+                -- when it ran out and `completed` is only believed near the
+                -- end. Here a sound says yes immediately, forever.
+                local m = withAssets(ROWS, 2.5)
+                MUSIC.setPlayer(function(src: any): any
+                    table.insert(played, tostring(src))
+                    local snd = { volume = 0 }
+                    function snd.completed(_self): boolean return true end
+                    function snd.stop(_self, _fade: number?) end
+                    live = snd
+                    return snd
+                end)
+                local dt = 1 / 120
+                for _ = 1, 120 * 5 do
+                    MUSIC.drive(m, dt, 1.0, prog(1, 0, 0, 0, 0))
+                end
+                -- Five seconds of it, and the intro has been started once.
+                expect(#played).is(1)
+                expect(played[1]).is('open')
+                -- Past the intro's ten seconds it moves on, exactly once.
+                for _ = 1, 120 * 6 do
+                    MUSIC.drive(m, dt, 1.0, prog(1, 0, 0, 0, 0))
+                end
+                expect(#played).is(2)
+                expect(played[2]).is('deal')
+                MUSIC.setPlayer(nil)
+            end)
+
+            test.case('nothing in the transport reads the audio clock', function(expect)
+                -- THE FAILURE THIS DESIGN EXISTS TO RULE OUT. The previous
+                -- transport asked the sound where it was and asked the
+                -- engine what time it was, and shipped broken twice: once
+                -- because seeking did not move the playhead, once because a
+                -- clock that never advanced wedged the throttle. Neither
+                -- could be reproduced in a test, because a test supplies
+                -- those clocks itself and they always behaved.
+                --
+                -- This runs the whole progression against a sound that
+                -- THROWS if asked the time. If the transport ever reaches
+                -- for it again, this is where it stops.
+                local m = withAssets(ROWS, 2.5)
+                MUSIC.setPlayer(function(src: any): any
+                    table.insert(played, tostring(src))
+                    local snd = { done = false, volume = 0 }
+                    function snd.completed(_self): boolean return snd.done end
+                    function snd.stop(_self, _fade: number?) end
+                    function snd.time(_self): number
+                        error('the transport must not read the audio clock')
+                    end
+                    function snd.seek(_self, _to: number)
+                        error('the transport must not seek')
+                    end
+                    live = snd
+                    return snd
+                end)
+                play(m, 11, prog(1, 0, 0, 0, 0))
+                play(m, 15, prog(1, 0, 10, 0, 0))
+                expect(MUSIC.playingIndex()).is(3)
+                play(m, 15, prog(1, 0, 26, 0, 0))
+                expect(MUSIC.playingIndex()).is(4)
                 MUSIC.noteWin(m, 52, 0, 0)
-                local function run(frames: number)
-                    for _ = 1, frames do
-                        s.t += 0.5
-                        now += 1
-                        MUSIC.follow(m, s, prog(1, 1, 52, 0, 0), now)
-                    end
-                end
-                run(20)   -- across the bar at 2.5, then 7.5s into the win loop
+                play(m, 3, prog(1, 1, 52, 0, 0))
                 expect(MUSIC.playingIndex()).is(5)
-                expect(MUSIC.queuedIndex()).is(0)
-                -- It got there once and then played on, rather than being
-                -- re-seeked to 40 over and over.
-                local restarts = 0
-                for _, to in ipairs(s.seeks) do
-                    if to == 150 then
-                        restarts += 1
-                    end
-                end
-                expect(restarts).is(1)
-                -- AND IT HOLDS. Running past the end of the win loop leaves
-                -- it on the win loop: the deal is over, and music that
-                -- wanders back to the playing bed half a minute after a win
-                -- is the game forgetting what just happened. A foundation
-                -- count of 52 would otherwise put it straight back on the
-                -- loud bed, which is the exact shape of that bug.
-                run(40)
-                expect(MUSIC.playingIndex()).is(5)
-                -- Only a new deal lets go of it.
-                MUSIC.noteDeal(m, 0, 0, 0)
-                expect(MUSIC.queuedIndex()).is(1)
-            end)
-
-            test.case('a completed sound is put back in its region, not advanced past it', function(expect)
-                -- The track runs off its end and keepPlaying re-plays it from
-                -- zero. The playhead is then BEFORE the region: that is a
-                -- restart, not a wrap, and treating it as a wrap would skip a
-                -- loop in the rotation every time the file ran out.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 100)
-                s.t = 10
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 101)
-                expect(MUSIC.playingIndex()).is(2)
-                s.t = 0
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 102)
-                expect(MUSIC.playingIndex()).is(2)
-                expect(s.t).is(10)
-            end)
-
-            test.case('a seek is not asked for twice while the engine catches up', function(expect)
-                -- The playhead is read once a frame and a seek is not
-                -- instant, so the frame after one can still report the old
-                -- time. The throttle is on the PLAYHEAD sitting where we put
-                -- it, not on a stopwatch.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 100)
-                local after = #s.seeks
-                -- Still parked on the seek target: nothing to decide yet.
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 100.01)
-                expect(#s.seeks).is(after)
-                -- It has moved and is inside the intro: still nothing to do,
-                -- but the throttle is no longer what is stopping it.
-                s.t = 5
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 100.02)
-                expect(#s.seeks).is(after)
-                -- The intro is over. It acts on the same frame it sees that,
-                -- without waiting out a gap.
-                s.t = 10
-                MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), 100.03)
-                expect(#s.seeks).is(after + 1)
-                expect(MUSIC.playingIndex()).is(2)
-            end)
-
-            test.case('a frozen engine clock cannot wedge the transport', function(expect)
-                -- THE BUG THIS REPLACED. The throttle used to be
-                -- `Audio.time() - lastSeek < SEEK_GAP`. On a runtime where
-                -- the engine clock does not advance, that is true forever
-                -- after the first seek: `follow` returns early on every
-                -- frame for the rest of the session, and no gate, no
-                -- escalation and no win ever fires again — while the music
-                -- plays on and everything sounds fine.
-                --
-                -- Nothing caught it, because every other test supplies its
-                -- own clock and advances it. This one refuses to.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                -- The engine clock never moves. The playhead does, in steps
-                -- small enough not to skip a block line — a test that jumps
-                -- it twenty seconds crosses two of them at once and lands
-                -- the switch in the same call it queued it, which proves
-                -- nothing about when it was meant to land.
-                local FROZEN = 7.5
-                local function frame(t: number, p: MUSIC.Progress)
-                    s.t = t
-                    MUSIC.follow(m, s, p, FROZEN)
-                end
-                frame(0, prog(1, 0, 0, 0, 0))
-                expect(MUSIC.playingIndex()).is(1)
-                frame(10, prog(1, 0, 0, 0, 0))
-                expect(MUSIC.playingIndex()).is(2)      -- the intro handed over
-                frame(31, prog(1, 0, 9, 0, 0))
-                expect(MUSIC.queuedIndex()).is(0)
-                frame(32, prog(1, 0, 10, 0, 0))
-                expect(MUSIC.queuedIndex()).is(3)       -- the ladder noticed
-                frame(37.6, prog(1, 0, 10, 0, 0))
-                expect(MUSIC.playingIndex()).is(2)      -- still waiting
-                frame(40.1, prog(1, 0, 10, 0, 0))
-                expect(MUSIC.playingIndex()).is(3)      -- and it landed
-            end)
-
-            test.case('the seek probe ignores a seek that had nothing to do', function(expect)
-                -- THE FALSE NEGATIVE THIS IS WRITTEN AGAINST. The first
-                -- placement seeks to the intro's start, which is zero, which
-                -- is where a sound that has just started already is. The
-                -- first version of the probe armed on it and reported the
-                -- runtime's seek broken — a verdict that was about to cost a
-                -- rewrite of the whole design.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local engine = 0
-                for _ = 1, 20 do
-                    engine += 0.1
-                    s.t += 0.1
-                    MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), engine)
-                end
-                -- Placed on the intro, several seconds of playback in, and
-                -- it has still said nothing: no seek so far has moved the
-                -- playhead anywhere it was not already going.
-                expect(MUSIC.seekVerdict()).is('?')
-            end)
-
-            test.case('the seek probe tells a working runtime from a dead one', function(expect)
-                -- A fake that SEEKS: the playhead lands on the target.
-                local m = withLoops(ROWS, 2.5)
-                local s = fakeSound(0)
-                local engine = 0
-                local function run(n: number)
-                    for _ = 1, n do
-                        engine += 0.25
-                        s.t += 0.25
-                        MUSIC.follow(m, s, prog(1, 0, 0, 0, 0), engine)
-                    end
-                end
-                -- Far enough to reach `deal`'s wrap at 70, which is the
-                -- first seek in this table that moves the playhead a long
-                -- way (back to 10) and so the first one worth measuring.
-                run(400)
-                expect(MUSIC.seekVerdict()).is('ok')
-
-                -- And a fake whose seek does NOTHING: the playhead carries
-                -- straight on however it is asked to move.
-                local m2 = withLoops(ROWS, 2.5)
-                local dead = fakeSound(0)
-                function dead.seek(_self, to: number)
-                    table.insert(dead.seeks, to)   -- recorded, and ignored
-                end
-                engine = 0
-                for _ = 1, 400 do
-                    engine += 0.25
-                    dead.t += 0.25
-                    MUSIC.follow(m2, dead, prog(1, 0, 0, 0, 0), engine)
-                end
-                expect(MUSIC.seekVerdict()).is('dead')
+                MUSIC.setPlayer(nil)
             end)
 
             test.case('a bar crossing is an edge, not a window', function(expect)

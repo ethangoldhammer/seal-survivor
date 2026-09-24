@@ -50,8 +50,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TABLE = join(ROOT, 'rive/sealitaire/musicLoops.csv');
 const BIN = join(ROOT, 'rive/sealitaire/music.bin');
-const MP3 = join(ROOT, 'rive/sealitaire/music.mp3');
-const WASH = join(ROOT, 'rive/sealitaire/music');
+
+const ASSETS = join(ROOT, 'rive/sealitaire/music');
 const SCENE = join(ROOT, 'rive/sealitaire/scene.rml');
 
 const ROLES = ['bed', 'intro', 'win'];
@@ -182,7 +182,7 @@ function decodeMono(src, rate) {
 // ---------------------------------------------------------------------------
 console.log('sealitaire loop table');
 
-for (const [what, path] of [['musicLoops.csv', TABLE], ['music.bin', BIN], ['music.mp3', MP3]]) {
+for (const [what, path] of [['musicLoops.csv', TABLE], ['music.bin', BIN]]) {
     if (!existsSync(path)) {
         fail(`${what} is missing`);
         process.exit(1);
@@ -299,72 +299,82 @@ const bake = readBake();
     }
 }
 
-// --- the washes are on disk, declared, and audible --------------------------
+// --- every region and ring-out is on disk, declared, and audible -----------
 {
-    const want = bake.loops.filter((l) => l.washSeconds > 0).map((l) => `wash-${l.id}`);
-    const onDisk = existsSync(WASH)
-        ? readdirSync(WASH).filter((f) => f.endsWith('.flac')).map((f) => f.slice(0, -5))
+    const want = [];
+    for (const l of bake.loops) {
+        want.push({ id: l.id, seconds: l.endSec - l.startSec, loop: true });
+        if (l.washSeconds > 0) want.push({ id: `wash-${l.id}`, seconds: l.washSeconds, loop: false });
+    }
+    const wantIds = want.map((w) => w.id);
+    const onDisk = existsSync(ASSETS)
+        ? readdirSync(ASSETS).filter((f) => f.endsWith('.flac')).map((f) => f.slice(0, -5))
         : [];
     const declared = [...readFileSync(SCENE, 'utf8')
         .matchAll(/<AudioAsset file="music\/([^"]+)\.flac" name="([^"]+)"/g)]
         .map((m) => m[2]);
     let bad = 0;
-    for (const id of want) {
+    for (const id of wantIds) {
         if (!onDisk.includes(id)) { fail(`${id}.flac is not in rive/sealitaire/music — re-run npm run sealitaire:music`); bad++; }
         if (!declared.includes(id)) { fail(`${id} has no <AudioAsset> in scene.rml, so the table cannot reach it`); bad++; }
     }
     for (const id of onDisk) {
-        if (!want.includes(id)) { fail(`music/${id}.flac is not wanted by any row — it ships for nothing`); bad++; }
+        if (!wantIds.includes(id)) { fail(`music/${id}.flac is not wanted by any row — it ships for nothing`); bad++; }
     }
     for (const id of declared) {
-        if (!want.includes(id)) { fail(`scene.rml declares ${id}, which no row wants`); bad++; }
+        if (!wantIds.includes(id)) { fail(`scene.rml declares ${id}, which no row wants`); bad++; }
     }
-    // And they contain audio. afconvert's FLAC encoder writes a valid, empty,
-    // 42-byte file when its input is too short — the exact trap
-    // sealitaire-sfx-test.mjs exists for. A wash that decodes to silence is a
-    // win with no reverb and nothing anywhere would say so.
-    for (const id of want) {
-        const path = join(WASH, `${id}.flac`);
+    // The single-track asset belonged to the seek design and must not come
+    // back: with it present the riv carries the whole bounce twice.
+    if (/<AudioAsset file="music\.mp3"/.test(readFileSync(SCENE, 'utf8'))) {
+        fail('scene.rml still declares music.mp3 — the whole bounce is shipping alongside the regions cut from it');
+        bad++;
+    }
+
+    // And they contain audio, of the right LENGTH. Length is the one that
+    // matters most for a region: the transport loops it on the clock, using
+    // the length musicLoops.csv claims, so a file that is short plays
+    // silence at the end of every pass and one that is long is cut off —
+    // and neither is visible anywhere else. afconvert's FLAC encoder also
+    // writes a valid, empty 42-byte file when its input is too short, which
+    // is the trap sealitaire-sfx-test.mjs exists for.
+    for (const w of want) {
+        const path = join(ASSETS, `${w.id}.flac`);
         if (!existsSync(path)) continue;
-        if (statSync(path).size < 1024) { fail(`${id}.flac is ${statSync(path).size} bytes — an empty FLAC header`); bad++; continue; }
-        const pcm = decodeMono(path, 32000);
+        if (statSync(path).size < 1024) { fail(`${w.id}.flac is ${statSync(path).size} bytes — an empty FLAC header`); bad++; continue; }
+        const RATE = 32000;
+        const pcm = decodeMono(path, RATE);
+        const heard = pcm.length / RATE;
+        if (Math.abs(heard - w.seconds) > 0.02) {
+            fail(`${w.id}.flac is ${heard.toFixed(3)}s, its row says ${w.seconds.toFixed(3)}s`);
+            bad++;
+        }
+        if (w.loop) {
+            const bars = heard / bake.barSeconds;
+            if (Math.abs(bars - Math.round(bars)) > 0.01) {
+                fail(`${w.id}.flac is ${bars.toFixed(3)} bars — a region that is not a whole number of bars cannot loop on the grid`);
+                bad++;
+            }
+        }
         let q = 0;
         for (let i = 0; i < pcm.length; i++) q += pcm[i] * pcm[i];
         const rms = Math.sqrt(q / Math.max(1, pcm.length));
-        if (rms < 1e-4) { fail(`${id}.flac decodes to silence (${(20 * Math.log10(rms + 1e-12)).toFixed(1)} dBFS)`); bad++; }
+        if (rms < 1e-4) { fail(`${w.id}.flac decodes to silence (${(20 * Math.log10(rms + 1e-12)).toFixed(1)} dBFS)`); bad++; }
     }
-    if (!bad) pass(`${want.length} wash(es) on disk, declared in scene.rml, and audible`);
+    if (!bad) pass(`${want.length} assets on disk, declared in scene.rml, whole bars, and audible`);
 }
 
-// --- and there is audio under every region ----------------------------------
+// --- the bake describes the same track the regions were cut from -----------
 {
-    const RATE = 24000;
-    const pcm = decodeMono(MP3, RATE);
-    const heard = pcm.length / RATE;
-    // The bake's duration is measured at the same rate off the same file, so
-    // these should agree to a hop. They disagree when music.mp3 has been
-    // replaced without re-baking — the one staleness the join check above
-    // cannot see, because the CSV and the blob would still agree with each
-    // other about a track neither of them describes any more.
-    if (Math.abs(heard - bake.duration) > 0.05) {
-        fail(`music.mp3 is ${heard.toFixed(3)}s, music.bin was baked from ${bake.duration.toFixed(3)}s — re-run npm run sealitaire:music`);
+    // The one staleness the join check cannot see: musicLoops.csv and
+    // music.bin agreeing with each other about a track neither of them
+    // describes any more. The regions' total length is the tell.
+    const cut = bake.loops.reduce((n, l) => n + (l.endSec - l.startSec), 0);
+    if (cut > bake.duration + 0.01) {
+        fail(`the regions total ${cut.toFixed(1)}s but the bake was made from a ${bake.duration.toFixed(1)}s track`);
     } else {
-        pass(`music.mp3 is ${heard.toFixed(1)}s, the same track the bake describes`);
+        pass(`${bake.loops.length} regions, ${cut.toFixed(1)}s cut from a ${bake.duration.toFixed(1)}s bounce`);
     }
-    let holes = 0;
-    for (const l of bake.loops) {
-        const beat = Math.min(bake.barSeconds / 4, l.endSec - l.startSec);
-        const s = Math.round(l.startSec * RATE);
-        const e = Math.min(pcm.length, s + Math.round(beat * RATE));
-        let q = 0;
-        for (let i = s; i < e; i++) q += pcm[i] * pcm[i];
-        const rms = Math.sqrt(q / Math.max(1, e - s));
-        if (rms < HOLE) {
-            fail(`"${l.id}" opens on silence: ${(20 * Math.log10(rms + 1e-12)).toFixed(1)} dBFS over its first beat`);
-            holes++;
-        }
-    }
-    if (!holes) pass(`every region has audio under its first beat`);
 }
 
 if (failures) {

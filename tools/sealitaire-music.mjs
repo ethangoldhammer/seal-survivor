@@ -8,9 +8,23 @@
 //
 //   node tools/sealitaire-music.mjs "/path/to/track.mp3" [--bpm=94]
 //
-// Writes rive/sealitaire/music.mp3 (a copy — the AudioAsset the table plays),
-// rive/sealitaire/music.bin (the analysis and the loop table, a BlobAsset),
-// and rive/sealitaire/music/wash-*.flac (see THE WASH below).
+// Writes rive/sealitaire/music.bin (the analysis and the loop table, a
+// BlobAsset) and rive/sealitaire/music/*.flac — ONE ASSET PER REGION, plus a
+// ring-out per region that asks for one (see THE WASH below).
+//
+// ONE ASSET PER REGION, and that is the load-bearing decision here. The first
+// version of this shipped the whole bounce as a single mp3 and had the
+// runtime hold the playhead inside a region by seeking. It never worked:
+// `AudioSound:seek` did not move the playhead in the shipped build, so the
+// track played end to end and every gate was inert — and a track that
+// ignores every seek sounds exactly like music, so nothing caught it.
+//
+// Cutting them here costs nothing anyone can hear and nothing on disk: the
+// five regions as lossless FLAC are 10.8 MB against the 10.4 MB mp3 they
+// replace, because the regions are 88 of the bounce's 104 bars and FLAC of
+// 88 bars is about what a 320 kbps mp3 of 104 is. What it buys is a runtime
+// that only ever plays a whole asset from its start, which is the one thing
+// it is known to do reliably — the sfx bank does it a hundred times a deal.
 //
 // THE LOOP TABLE RIDES IN THE SAME BLOB. rive/sealitaire/musicLoops.csv names
 // regions of the one track — a start bar, a length in bars, when the table is
@@ -19,10 +33,9 @@
 // blobs, and music.bin is the blob the music already has. Two blobs that must
 // agree about the same track is a join that can go stale; one cannot.
 //
-// The regions are NOT cut into files. `AudioSound:seek` exists, so the table
-// plays one asset and stays inside a region by seeking — which is what makes
-// this work from a single bounce with nothing exported twice. `npm run
-// sealitaire:loops` is where the regions are measured; this only carries them.
+// Ethan never exports the regions separately — `npm run sealitaire:loops`
+// measures where they are in the one bounce he hands over, and this cuts
+// them. Nothing is uploaded twice.
 //
 // LOG in both axes, because both are how hearing works:
 //   - the BANDS are log-spaced from 40 Hz to 12 kHz, so a band is roughly a
@@ -49,7 +62,7 @@
 // machine and an mp3 decoder is not worth vendoring for a one-shot bake.
 // ============================================================================
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -145,6 +158,12 @@ const LOOP_BYTES = 36;
 // 32 kHz, matching the sfx bank: after the darkening there is nothing above
 // 10 kHz in it, and the three washes are 2 MB at this rate instead of 3.
 const WASH_RATE = 32000;
+// The regions themselves at the source rate, lossless. FLAC rather than mp3
+// for one reason: an mp3 carries 20-36ms of encoder delay at its head, and a
+// region that repeats every twenty-four bars would put that silence at the
+// top of every pass. A cut region has to loop on itself seamlessly and only
+// a lossless format does.
+const LOOP_RATE = 48000;
 const WASH_DELAY_BARS = 0.5;
 const WASH_FEEDBACK = 0.55;   // the delay's, per repeat
 // How far under the bar it follows a wash opens. A SEND level: one number
@@ -152,7 +171,7 @@ const WASH_FEEDBACK = 0.55;   // the delay's, per repeat
 // throw — present, clearly the music, clearly behind it. `musicWash` in
 // tuning.luau scales it live from there.
 const WASH_SEND_DB = -10;
-const WASH_FIRST_ID = 2400;   // scene.rml asset ids; the bank ends at 2099
+const MUSIC_FIRST_ID = 2400;  // scene.rml asset ids; the sfx bank ends at 2099
 
 // ---------------------------------------------------------------------------
 // Decode
@@ -527,25 +546,63 @@ function readLoops(path, barSeconds, duration) {
 }
 
 // ---------------------------------------------------------------------------
-// The washes, and the <AudioAsset> lines that make them reachable. Pruning is
-// part of it: a renamed row leaves its old .flac on disk and in the scene,
-// and an asset nobody plays is dead weight in a 22 MB file.
+// The regions, their ring-outs, and the <AudioAsset> lines that make them
+// reachable. Pruning is part of it: a renamed row leaves its old .flac on
+// disk and in the scene, and an asset nobody plays is dead weight in a file
+// that is already twenty megabytes.
 // ---------------------------------------------------------------------------
-function bakeWashes(src, loops, barSeconds) {
+function cutRegion(chans, loop, rate) {
+    const from = Math.round(loop.startSec * rate);
+    const to = Math.min(chans[0].length, Math.round(loop.endSec * rate));
+    const n = Math.max(0, to - from);
+    const out = new Int16Array(n * 2);
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+        for (let c = 0; c < 2; c++) {
+            const v = Math.max(-1, Math.min(1, chans[c][from + i] ?? 0));
+            if (Math.abs(v) > peak) peak = Math.abs(v);
+            out[i * 2 + c] = Math.round(v * 32767);
+        }
+    }
+    // NOT levelled, NOT faded. A region is a verbatim cut of the bounce: its
+    // level relative to its neighbours is the arrangement Ethan wrote, and a
+    // fade at the edges would put a dip at every loop point.
+    return { pcm: out, peak, seconds: n / rate };
+}
+
+function bakeAssets(src, loops, barSeconds) {
     const dir = join(DEST, 'music');
-    const want = loops.filter((l) => l.washSeconds > 0);
     mkdirSync(dir, { recursive: true });
-    const names = new Set(want.map((l) => `wash-${l.id}`));
+    const names = new Set();
+    for (const l of loops) {
+        names.add(l.id);
+        if (l.washSeconds > 0) names.add(`wash-${l.id}`);
+    }
     for (const f of readdirSync(dir)) {
         if (f.endsWith('.flac') && !names.has(f.slice(0, -5))) {
             rmSync(join(dir, f));
             console.log(`  pruned music/${f} — no row wants it any more`);
         }
     }
-    if (want.length) {
-        const chans = decodeStereo(src, WASH_RATE);
-        for (const l of want) {
-            const { pcm, peak, wet, dry } = renderWash(chans, l, WASH_RATE, barSeconds, l.washSeconds);
+
+    // The regions, at the source rate.
+    const loopChans = decodeStereo(src, LOOP_RATE);
+    for (const l of loops) {
+        const { pcm, peak, seconds } = cutRegion(loopChans, l, LOOP_RATE);
+        const bytes = writeFlac(dir, l.id, pcm, LOOP_RATE);
+        const bars = seconds / barSeconds;
+        console.log(
+            `  ${l.id.padEnd(12)} ${seconds.toFixed(3)}s = ${bars.toFixed(3)} bars, ` +
+            `peak ${(20 * Math.log10(peak + 1e-12)).toFixed(1)} dBFS, ${(bytes / 1024).toFixed(0)} KB`
+        );
+    }
+
+    // The ring-outs, darker and quieter, so a lower rate costs nothing.
+    const wash = loops.filter((l) => l.washSeconds > 0);
+    if (wash.length) {
+        const washChans = decodeStereo(src, WASH_RATE);
+        for (const l of wash) {
+            const { pcm, peak, wet, dry } = renderWash(washChans, l, WASH_RATE, barSeconds, l.washSeconds);
             const bytes = writeFlac(dir, `wash-${l.id}`, pcm, WASH_RATE);
             const db = (v) => (20 * Math.log10(v + 1e-12)).toFixed(1);
             console.log(
@@ -554,24 +611,28 @@ function bakeWashes(src, loops, barSeconds) {
             );
         }
     }
+
     // scene.rml, between markers, exactly as the sfx bakers do it.
     const ids = [...names].sort();
     const scene = readFileSync(join(DEST, 'scene.rml'), 'utf8');
     const block = [
-        '    <!-- MUSIC WASH: generated by tools/sealitaire-music.mjs from musicLoops.csv; do not hand-edit -->',
-        ...ids.map((id, k) => `    <AudioAsset file="music/${id}.flac" name="${id}" id="0:${WASH_FIRST_ID + k}"/>`),
-        '    <!-- /MUSIC WASH -->',
+        '    <!-- MUSIC: generated by tools/sealitaire-music.mjs from musicLoops.csv; do not hand-edit -->',
+        ...ids.map((id, k) => `    <AudioAsset file="music/${id}.flac" name="${id}" id="0:${MUSIC_FIRST_ID + k}"/>`),
+        '    <!-- /MUSIC -->',
     ].join('\n');
-    const re = /    <!-- MUSIC WASH:[\s\S]*?<!-- \/MUSIC WASH -->/;
+    const re = /    <!-- MUSIC(?: WASH)?:[\s\S]*?<!-- \/MUSIC(?: WASH)? -->/;
     let next;
     if (re.test(scene)) {
         next = scene.replace(re, block);
     } else {
-        const anchor = scene.indexOf('    <AudioAsset file="music.mp3"');
+        const anchor = scene.indexOf('    <BlobAsset file="music.bin"');
         const eol = scene.indexOf('\n', anchor);
         next = scene.slice(0, eol + 1) + block + '\n' + scene.slice(eol + 1);
     }
+    // The single-track asset is gone with the design that needed it.
+    next = next.replace(/[ \t]*<AudioAsset file="music\.mp3"[^>]*\/>\n/, '');
     if (next !== scene) writeFileSync(join(DEST, 'scene.rml'), next);
+    rmSync(join(DEST, 'music.mp3'), { force: true });
     return ids.length;
 }
 
@@ -734,11 +795,10 @@ function main() {
         }
     }
     writeFileSync(join(DEST, 'music.bin'), out);
-    copyFileSync(src, join(DEST, 'music.mp3'));
-    const washes = bakeWashes(src, loops, barSeconds);
+    const assets = bakeAssets(src, loops, barSeconds);
     console.log(
-        `sealitaire-music: music.bin ${(out.length / 1024).toFixed(1)} KB ` +
-        `(${loops.length} loops, ${washes} washes), music.mp3 copied`
+        `sealitaire-music: music.bin ${(out.length / 1024).toFixed(1)} KB, ` +
+        `${assets} audio assets for ${loops.length} loops`
     );
 }
 

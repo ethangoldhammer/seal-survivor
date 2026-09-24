@@ -25,6 +25,40 @@
 // player is "finally interesting" to another. Tune here.
 import { SOURCE_LABELS } from '../sourceLabels.generated.js';
 
+// ===========================================================================
+// RUNS THE DEBUG PANEL TOUCHED
+//
+// The `u` panel can hand the seal upgrades and put creatures in the water on
+// demand (path/src/ui/upgradeDebug.js). A run it interfered with is not a
+// playtest — it is a thing being LOOKED AT — and pooling one into an average
+// answers a question nobody asked: a granted build inflates that ability's
+// damage share and its return-per-pick, and a hand-spawned school inflates
+// kills, xp and the threat figures for a creature the ramp never sent.
+//
+// TWO FIELDS, matching the two kinds of lie, both stamped by the panel. Read
+// as "either", because either one is enough to set the run aside.
+//
+// A PREDICATE HERE RATHER THAN A FILTER IN EACH TOOL, for the same reason the
+// rest of this module exists: the terminal report, the atlas and the in-game
+// overlay have to agree about what counts, and three copies of `r.debugGranted
+// || r.debugSpawned` is three places for a third field to be forgotten.
+//
+// Only the archive can be wrong about this. Spawning was not stamped until
+// 2026-09-21, so a dev run before then that only spawned creatures reads as
+// clean and cannot be recovered — there is nothing in the record to read it
+// off. Grants were stamped from the start.
+export function isDebugRun(run) {
+  return Boolean(run?.debugGranted || run?.debugSpawned);
+}
+
+/** Why a run was set aside — for a reader asking what the panel actually did. */
+export function debugRunReason(run) {
+  const bits = [];
+  if (run?.debugGranted) bits.push('granted upgrades');
+  if (run?.debugSpawned) bits.push('spawned creatures');
+  return bits.join(' + ');
+}
+
 export const BALANCE = {
   // Damage you deal per second ÷ enemy hp arriving per second. Below 1.0 the
   // arena is filling faster than you can empty it; the run is now on a timer

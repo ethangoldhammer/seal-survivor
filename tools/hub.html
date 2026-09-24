@@ -49,6 +49,19 @@
   .row .acts { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
   .row.hit { border-color: var(--acc); }
 
+  /* THREE GAMES, TWO OR THREE ROWS EACH. Every row in this repo's panels is
+     the same weight, which was right while the section held one game and its
+     two attendants — and turns eight identical bars into a list you have to
+     read twice the moment there are three. So the game's own row keeps the
+     weight, and the rows that belong to it are stepped in under it: a group
+     you can see the shape of without reading a word of it. `game` opens one,
+     `under` is everything below it until the next one. */
+  .row.game { margin-top: 14px; }
+  .row.game:first-child { margin-top: 0; }
+  .row.game .name { color: var(--ink); }
+  .row.under { margin-left: 22px; background: transparent; }
+  .row.under .name { color: var(--dim); }
+
   .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
   .dot.keep { background: var(--go); box-shadow: 0 0 8px var(--go); }
   .dot.stomp { background: var(--stop); box-shadow: 0 0 8px var(--stop); }
@@ -177,13 +190,14 @@
     </div>
   </section>
 
-  <section id="s-sealitaire">
-    <h2>Sealitaire</h2>
-    <p class="lede">Klondike on the ocean — the live viewer window and the tuning save loop, which is
-      what <code>npm run sealitaire</code> starts. One at a time: the viewer rewrites
-      <code>tuning.luau</code> when you press SAVE, so a second one would overwrite the first one's
-      work. Opening one while another is up prints why and starts nothing.</p>
-    <div id="sealitaire"></div>
+  <section id="s-games">
+    <h2>Games</h2>
+    <p class="lede">The two playable things in this repo, and a door into each. Sealitaire is a
+      viewer window with a tuning save loop behind it — one at a time, because the viewer rewrites
+      <code>tuning.luau</code> when you press SAVE, and opening a second prints why and starts
+      nothing. Blubberball has no window of its own: its door is an address on the game
+      server. The roster is <code>tools/games.mjs</code>.</p>
+    <div id="games"></div>
   </section>
 
   <section id="s-servers">
@@ -331,41 +345,79 @@ function drawSkip() {
   $('#shipmsg').onkeydown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
 }
 
-// --- sealitaire ------------------------------------------------------------
-// Its own section rather than a row in the Servers list, because it is neither
-// a server (no port, nothing on the socket table to find it by) nor a script
-// you scroll to — it is the second game in this repo and it gets a door.
+// --- games ----------------------------------------------------------------
+// Its own section rather than rows in the Servers list, because a game is
+// neither a server (a viewer has no port, and nothing on the socket table
+// finds it) nor a script you scroll to — these are the things this repo IS,
+// and they get a door.
 //
-// IT SEES ONE IT DID NOT START. A viewer has no port, so the socket survey
-// behind the Servers section cannot find it — `ST.sealitaire.pid` comes from
-// sealitaire-tune.mjs's own check instead, which means the Dock app's viewer
-// and a terminal's both show up here. Without that this card said "not open"
-// with the table open on screen beside it, and the button was an offer it
-// could not keep.
+// GENERATED FROM ST.games, which is tools/games.mjs read live. This card used
+// to be Sealitaire's alone, hand-written, with "open the table" typed into it;
+// Blubberball was four presses into the game (and Wordboard, before it moved
+// to its own repo, was one row among a hundred and thirty in the command list). A workbench that ranks its own
+// subjects by the order they were written is the thing this page exists to
+// stop, so the roster is a table now and this only knows how to draw a row.
+//
+// IT SEES ONE IT DID NOT START. A viewer has no port, so `pid` comes from that
+// game's own tune tool rather than from the socket survey — which means the
+// Dock app's viewer and a terminal's both show up here. Without that this card
+// said "not open" with the table open on screen beside it, and the button was
+// an offer it could not keep.
 //
 // The button still never guards. It starts the script and lets the tool
 // refuse, because the tool refuses for EVERY caller and this page is not a
 // special one; the reason lands in the output drawer.
-function drawSealitaire() {
-  const box = $('#sealitaire');
+function drawGames() {
+  const box = $('#games');
   box.textContent = '';
+  for (const g of ST.games ?? []) box.append(...gameRows(g));
+}
 
-  const live = ST.runs.find((r) => r.name === 'sealitaire' && r.status === 'running');
-  const pid = ST.sealitaire?.pid ?? 0;
+function gameRows(g) {
+  const rows = [];
+  const live = ST.runs.find((r) => r.name === g.script && r.status === 'running');
 
-  const row = el('div', 'row');
-  row.append(el('span', 'dot ' + (pid ? 'keep' : 'down')));
-  row.append(el('span', 'name', 'the table'));
-  row.append(el('span', 'blurb', !pid ? 'not open'
+  // A ROUTE GAME (Blubberball) is open when its SERVER is up, and the address
+  // is the door — so its row is a link to a port nobody chose rather than a
+  // pid. Everything else about the row is the same shape, on purpose: three
+  // games, three rows, one glance.
+  const origin = g.role ? ST.origins[g.role] : '';
+  const up = g.role ? !!origin : !!g.pid;
+
+  // THE GAME'S NAME, not its surface. This row said "the table" while the card
+  // above it was headed Sealitaire and there was nothing else in the section;
+  // with three of them under one Games heading, "the board" is a row you have
+  // to work out. The surface is still what the button opens, which is where
+  // that word belongs — and what the game IS rides along as the row's title,
+  // where it costs the glance nothing.
+  const row = el('div', 'row game');
+  row.title = g.blurb;
+  row.append(el('span', 'dot ' + (up ? 'keep' : 'down')));
+  row.append(el('span', 'name', g.label));
+  const b = el('span', 'blurb');
+  b.append(el('span', null, !up ? (g.role ? 'the game server is not running' : 'not open')
+    : g.role ? 'the game server is up'
     : live ? 'open — started from this page'
     : 'open — started somewhere else (the Dock button, or a terminal)'));
+  // The address is resolved against the live socket table every poll and never
+  // remembered, the same as every link in the Servers section: the game's port
+  // moves every time it restarts.
+  const meta = el('span', null, up && g.role ? ' — ' + origin + g.url : '');
+  meta.style.color = 'var(--faint)';
+  b.append(meta);
+  row.append(b);
 
   const acts = el('div', 'acts');
-  if (pid && !live) {
+  if (g.role && origin) {
+    const a = el('a', 'btn go', 'open ' + g.door);
+    a.href = origin + g.url;
+    a.target = '_blank';
+    acts.append(a);
+  } else if (g.pid && !live) {
     // Nothing to stop and no output to show: this page did not start it, so it
     // has neither the pid's run nor its log. Say that rather than offering a
     // button that would start a second one.
-    acts.append(el('span', 'chip running', 'pid ' + pid));
+    acts.append(el('span', 'chip running', 'pid ' + g.pid));
   } else if (live) {
     const seeit = el('button', 'btn', 'output');
     seeit.onclick = () => watch(live.id);
@@ -373,38 +425,44 @@ function drawSealitaire() {
     stop.onclick = async () => { await api('/api/stop-run', { id: live.id }); poll(); };
     acts.append(seeit, stop);
   } else {
-    const go = el('button', 'btn go', 'open the table');
-    go.onclick = () => run('sealitaire');
+    const go = el('button', 'btn go', 'open ' + g.door);
+    go.onclick = () => run(g.script);
     acts.append(go);
   }
-  acts.append(copyBtn('npm run sealitaire'));
+  acts.append(copyBtn('npm run ' + g.script));
   row.append(acts);
-  box.append(row);
+  rows.push(row);
 
   // The Dock button. Generated rather than committed, so the row says how to
   // make one rather than pretending it is already there.
-  const dock = el('div', 'row');
+  const dock = el('div', 'row under');
   dock.append(el('span', 'dot down'));
   dock.append(el('span', 'name', 'Dock button'));
   dock.append(el('span', 'blurb',
-    'Sealitaire.app in ~/Applications — the same table, no terminal. Re-generate it after moving the repo or changing node.'));
+    g.label + '.app in ~/Applications — ' + g.door + ', no terminal. Re-generate it after moving the repo or changing node.'));
   const dacts = el('div', 'acts');
   const mk = el('button', 'btn', 'generate');
-  mk.onclick = () => run('sealitaire:app');
-  dacts.append(mk, copyBtn('npm run sealitaire:app'));
+  mk.onclick = () => run(g.app);
+  dacts.append(mk, copyBtn('npm run ' + g.app));
   dock.append(dacts);
-  box.append(dock);
+  rows.push(dock);
 
-  // The Rive editor round trip. The .rml is the source of truth and the
-  // editor is where Ethan nudges it, so these are the two directions and they
-  // live here rather than three drawers apart under Audits and Publish: pull
-  // asks the open editor for its copy and diffs it (nothing written), apply
-  // writes the attribute changes back, push replaces the editor's copy with
-  // ours. Push last, and only after a pull, because it overwrites whatever
-  // was nudged in the editor and not yet pulled — the blurb says so, and the
-  // order of the buttons says so.
-  const ed = el('div', 'row');
-  const pulling = ST.runs.find((r) => /^sealitaire:(pull|push)/.test(r.name) && r.status === 'running');
+  // The Rive editor round trip, for the games that have one. The .rml is the
+  // source of truth and the editor is where Ethan nudges it, so these are the
+  // two directions and they live here rather than three drawers apart under
+  // Audits and Publish: pull asks the open editor for its copy and diffs it
+  // (nothing written), apply writes the attribute changes back, push replaces
+  // the editor's copy with ours. Push last, and only after a pull, because it
+  // overwrites whatever was nudged in the editor and not yet pulled — the
+  // blurb says so, and the order of the buttons says so.
+  //
+  // Blubberball has no row here. Its rive/ project draws the CARDS inside the
+  // game rather than the pitch this row's door opens, so those scripts stay in
+  // the command list where they have always been.
+  if (!g.editor) return rows;
+  const ed = el('div', 'row under');
+  const re = new RegExp('^' + g.editor + ':(pull|push)');
+  const pulling = ST.runs.find((r) => re.test(r.name) && r.status === 'running');
   ed.append(el('span', 'dot ' + (pulling ? 'keep' : 'down')));
   ed.append(el('span', 'name', 'the Rive editor'));
   ed.append(el('span', 'blurb', pulling ? `${pulling.name} running`
@@ -416,16 +474,17 @@ function drawSealitaire() {
     eacts.append(seeit);
   } else {
     const pull = el('button', 'btn go', 'pull');
-    pull.onclick = () => run('sealitaire:pull');
+    pull.onclick = () => run(g.editor + ':pull');
     const apply = el('button', 'btn', 'pull & apply');
-    apply.onclick = () => run('sealitaire:pull:apply');
+    apply.onclick = () => run(g.editor + ':pull:apply');
     const push = el('button', 'btn', 'push');
-    push.onclick = () => run('sealitaire:push');
+    push.onclick = () => run(g.editor + ':push');
     eacts.append(pull, apply, push);
   }
-  eacts.append(copyBtn('npm run sealitaire:pull'));
+  eacts.append(copyBtn('npm run ' + g.editor + ':pull'));
   ed.append(eacts);
-  box.append(ed);
+  rows.push(ed);
+  return rows;
 }
 
 // --- servers ---------------------------------------------------------------
@@ -707,7 +766,7 @@ async function poll() {
   ST = await api('/api/state');
   $('#hubport').textContent = ST.port;
   drawShip();
-  drawSealitaire();
+  drawGames();
   drawServers();
   drawPages();
   drawCommands();
@@ -733,7 +792,7 @@ $('#runsel').onchange = (e) => watch(Number(e.target.value));
 $('#dstop').onclick = async () => { await api('/api/stop-run', { id: watching }); pumpLog(); poll(); };
 
 // Jump links, built from the sections that exist.
-for (const [id, label] of [['s-ship', 'ship'], ['s-sealitaire', 'sealitaire'], ['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
+for (const [id, label] of [['s-ship', 'ship'], ['s-games', 'games'], ['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
   const b = el('button', null, label);
   b.onclick = () => document.getElementById(id).scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('#tabs').append(b);

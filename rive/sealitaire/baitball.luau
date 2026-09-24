@@ -224,9 +224,35 @@ local function seatHalf(w: Walls, padX: number, padY: number, girth: number): (n
     return math.max(0.1, hx - padX), math.max(0.1, hy - padY)
 end
 
+-- A school's bodies are not all one length: each is `size` scattered over
+-- [LEN_MIN, LEN_MIN + LEN_VARY) from its own hash, so the number is a shoal
+-- rather than a stamped pattern. The grid they sit in is fitted to the
+-- LONGEST of them — one number for the whole school — so every column is
+-- straight and every row is level while the longest nose still clears the
+-- rank. A lone creature is exactly `size`.
+local LEN_MIN, LEN_VARY = 0.85, 0.3
+
+local function lenOf(inp: Inputs, n: number, h3: number): number
+    return inp.size * (if n == 1 then 1 else LEN_MIN + LEN_VARY * h3)
+end
+
+-- Half the longest body a school of this size can hold: the formation's
+-- clearance, and the only length the resting grid is allowed to know.
+local function schoolHalf(inp: Inputs): number
+    return inp.size * (LEN_MIN + LEN_VARY) * 0.5
+end
+
 -- A school at rest sits in FORMATION: the pip layout of a playing card,
 -- made of fish, so the count reads as the number. Seats as (column, row)
 -- in [-1, 1]; a lone body has no formation (it loops instead).
+--
+-- Row -1 is the card's BOTTOM and row 1 its top (world +y is up, and `seat`
+-- multiplies straight through), which is what the seven got wrong: its odd
+-- pip sat at -0.5, putting the double gap at the TOP of the card. A real
+-- seven has one gap twice the others — that is the shape of a seven — but it
+-- belongs between the middle and bottom rows, where the eye expects it, so
+-- the odd pip goes in the UPPER half at 0.5. It is the eight's upper pip with
+-- the lower one taken away, which is exactly what a seven is.
 local FORMATION: { { { number } } } = {
     {},
     { { 0, -1 }, { 0, 1 } },
@@ -234,7 +260,7 @@ local FORMATION: { { { number } } } = {
     { { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } },
     { { -1, -1 }, { 1, -1 }, { 0, 0 }, { -1, 1 }, { 1, 1 } },
     { { -1, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 1, 1 } },
-    { { -1, -1 }, { 1, -1 }, { 0, -0.5 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 1, 1 } },
+    { { -1, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { 0, 0.5 }, { -1, 1 }, { 1, 1 } },
     { { -1, -1 }, { 1, -1 }, { 0, -0.5 }, { -1, 0 }, { 1, 0 }, { 0, 0.5 }, { -1, 1 }, { 1, 1 } },
     { { -1, -1 }, { 1, -1 }, { -1, -1 / 3 }, { 1, -1 / 3 }, { 0, 0 }, { -1, 1 / 3 }, { 1, 1 / 3 }, { -1, 1 }, { 1, 1 } },
     { { -1, -1 }, { 1, -1 }, { 0, -2 / 3 }, { -1, -1 / 3 }, { 1, -1 / 3 }, { -1, 1 / 3 }, { 1, 1 / 3 }, { 0, 2 / 3 }, { -1, 1 }, { 1, 1 } },
@@ -359,9 +385,20 @@ local function seat(b: Ball, f: Fish, inp: Inputs, n: number, phase: number, i: 
     -- the NOSE is what clears the number rather than the centre. The row span
     -- was a flat 0.9 — a number that happened to fit one camera and ignored
     -- both the body's length and the pad.
+    --
+    -- Half a body means half the LONGEST body in the school (`schoolHalf`),
+    -- never this one's own. A school's lengths are scattered ±15% round
+    -- `size`, and measuring the grid per body made every column crooked and
+    -- every row uneven — a short fish sat further out than the long one
+    -- beside it, by up to 4px of a 120px card at size 1 and 13px on a big
+    -- one. A pip layout that is not a grid is not a number, and the drop
+    -- below made it worse: its room was per body too, so each fish fell its
+    -- own distance and the rows sheared apart. The grid is a property of the
+    -- SCHOOL; only the WALLS are a body's own.
     local cx, cy = formation(i, n)
-    local colX = math.min(0.5, math.max(0.1, hx - f.len * 0.5 - 0.08))
-    local rowY = math.max(0.15, hy - f.len * 0.5 - 0.08)
+    local half = schoolHalf(inp)
+    local colX = math.min(0.5, math.max(0.1, hx - half - 0.08))
+    local rowY = math.max(0.15, hy - half - 0.08)
     -- The gaps scale the fitted spread: a slider, so the number's shape is
     -- tuned by eye rather than by the seat edge alone.
     -- The breathing is `sway`: 0 is a number that sits dead still.
@@ -371,7 +408,7 @@ local function seat(b: Ball, f: Fish, inp: Inputs, n: number, phase: number, i: 
     -- hand deciding where the number sits, and at `rowGap` 1 the formation
     -- already fills the padded box, so pad-limited there would be no drop.
     local _, wallY = halfAt(inp.walls, 0, 0)
-    local ly = bias(cy * rowY * inp.rowGap + math.sin(phase * 1.3 + f.h1 * 6.3) * 0.03 * inp.sway, wallY - f.len * 0.5 - 0.02, rowY * inp.rowGap)
+    local ly = bias(cy * rowY * inp.rowGap + math.sin(phase * 1.3 + f.h1 * 6.3) * 0.03 * inp.sway, wallY - half - 0.02, rowY * inp.rowGap)
     local lz = math.sin(phase * 0.7 + f.h3 * 6.3) * 0.05 * inp.sway
     local k = b.excite
     return lx + (rxp - lx) * k, ly + (ryp - ly) * k, lz + (rzp - lz) * k
@@ -406,7 +443,7 @@ local function ensure(b: Ball, inp: Inputs, n: number)
         local h3 = hash(b.seed * 91 + i * 7)
         local f: Fish = {
             x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0, hx = 0, hy = 0, hz = -1,
-            h1 = h1, h2 = h2, h3 = h3, len = inp.size * (if n == 1 then 1 else 0.85 + 0.3 * h3),
+            h1 = h1, h2 = h2, h3 = h3, len = lenOf(inp, n, h3),
             cool = 0, phase = h2, enter = 0,
             dnx = 0, dny = 1, dnz = 0, dz0 = 0, dent = 0, dentV = 0, dage = 0, dkick = 0, touch = 0, kickRef = 0, rig = nil,
         }

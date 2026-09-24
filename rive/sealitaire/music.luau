@@ -2,8 +2,9 @@
 -- THE MUSIC — the track's baked FFT read back against the playhead, turned
 -- into ripple impulses on the water.
 --
--- Rive's scripting cannot analyse audio — a script can start a sound, ask it
--- the time and seek it, and that is all it gets. So the FFT is baked by
+-- Rive's scripting cannot analyse audio: a script starts a sound and can ask
+-- whether it has finished, and for this file's purposes that is all. So the
+-- FFT is baked by
 -- `npm run sealitaire:music` into music.bin — eight log-spaced bands at 60
 -- frames a second, each frame a LEVEL (log magnitude, normalised against the
 -- track's own quiet and loud) and a FLUX (how far that band just rose above
@@ -32,13 +33,14 @@
 export type Band = { k: number, x: number, y: number, level: number, flux: number }
 
 -- ---------------------------------------------------------------------------
--- THE LOOPS. One bounce, several regions of it, and the table seeks between
--- them — nothing is cut into a file of its own.
+-- THE LOOPS. One bounce, cut into regions, ONE ASSET EACH.
 --
--- That is possible because `AudioSound:seek` exists. It did not used to, and
--- comments elsewhere in this project still say `Audio.play` is the whole of
--- the audio API; they are out of date. Seeking is what lets a twenty-six-loop
--- bounce ship as one asset and one bake.
+-- Ethan hands over a single file with the loops laid end to end and never
+-- exports them separately; `npm run sealitaire:loops` measures where they
+-- are and `npm run sealitaire:music` cuts them. Nothing is uploaded twice,
+-- and the runtime still only ever plays a whole asset from its start, which
+-- is the one thing it is known to do well. See THE TRANSPORT below for why
+-- that matters more than it sounds.
 --
 -- `role` and `gate` are integers, not names, because the bake writes integers
 -- — a typo in musicLoops.csv fails in `npm run sealitaire:music`, where it
@@ -67,7 +69,8 @@ export type Loop = {
     gate: number,
     gateN: number,
     washSeconds: number,   -- 0 if this loop has no baked ring-out
-    wash: AudioSource?,    -- resolved at load; nil if the asset is missing
+    src: AudioSource?,     -- the region's own asset, resolved at load
+    wash: AudioSource?,    -- its ring-out, likewise
 }
 
 -- What the gates are asked about. The table fills it every frame; the last
@@ -99,58 +102,85 @@ export type Music = {
     energy: number,        -- the whole track's level, smoothed: a bed, not a hit
 }
 
--- ONE TRACK, EVER.
+-- ONE SOUND AT A TIME, and the module owns it.
 --
--- The sound handle lives in this MODULE, not on the table that asks for it. A
--- module is loaded once per scripting context, so `current` is the one place
--- a sound exists and `keepPlaying` is the only thing that ever starts one —
--- every table, every frame, asks it and gets the same sound back.
+-- A module is loaded once per scripting context, so `current` is the one
+-- place a sound exists. Every table asks the driver every frame and they all
+-- drive the same one; a second table starting a second copy was the whole of
+-- an early bug, and the fix is that no table can.
 --
--- The track is a minute and a game is not, and there is no loop flag on an
--- `AudioSound`, so looping means playing it again. Two things about that, and
--- both of them were wrong before:
---
---   STOP FIRST. Playing again without stopping the finished one leaves it in
---   the mix. It is quiet, so the first loop sounds fine and the tenth is a
---   wall — the symptom is the track "not stopping the old instance", and it
---   only shows up minutes in, which is nowhere near where you look.
---
---   BELIEVE `completed` ONLY ONCE A SECOND. `completed` is a question asked
---   of a handle, and a handle to a sound that has been stopped answers yes
---   having played nothing. With no floor under how often that answer may
---   start a sound, one spurious yes starts a second voice on the next frame,
---   and that one's yes starts a third — at the player's 120 advances a second
---   the track machine-guns, and every copy is still playing. RESTART_GAP is
---   the floor, on the audio engine's own clock, which is the only clock here
---   that is not the thing under suspicion.
-local RESTART_GAP = 1.0
-
+-- STOP BEFORE STARTING. Playing again without stopping the last one leaves
+-- it in the mix. It is quiet, so the first change sounds fine and the tenth
+-- is a wall — the symptom shows up minutes in, nowhere near where you look.
+-- `playLoop` is the only thing that starts a sound and it always stops first.
 local current: AudioSound? = nil
-local lastStart = -1000
 
 -- ---------------------------------------------------------------------------
--- THE TRANSPORT. Beside `current` and for the same reason: there is one
--- sound, so there is one playhead, so there is one answer to "which region is
--- playing". A table asks; it does not own any of this.
+-- THE TRANSPORT
 --
--- `sessionDeals` and `sessionWins` are here rather than on the table because
+-- ONE REGION IS ONE ASSET, and the only things this does to it are `play`,
+-- `completed` and `stop`. That is the whole design and it is a deliberate
+-- retreat from the previous one.
+--
+-- This used to play a single bounce of the whole track and hold the playhead
+-- inside a region by seeking. It read well and it never worked: the gates,
+-- the ladder and the win were all inert in the shipped build because
+-- `AudioSound:seek` did not move the playhead, and nothing could tell —
+-- a track that ignores every seek plays from end to end and sounds exactly
+-- like music. Two rounds of diagnosis went into a primitive that the rest of
+-- this project never uses.
+--
+-- `Audio.play` on a discrete asset is not a guess. The sfx bank runs a
+-- hundred of them through it on every deal and has for months; `completed`
+-- is what the old single-track loop already restarted on. Everything below
+-- is built from those and nothing else.
+--
+-- THREE THINGS IT DELIBERATELY DOES NOT DEPEND ON, because each one has
+-- already cost a day:
+--
+--   seek          not called anywhere. There is nothing to seek.
+--   Audio.time()  not consulted for any decision. A frozen engine clock
+--                 wedged the previous transport permanently.
+--   sound:time()  not consulted for any decision. The bake lookup uses the
+--                 clock below instead, which also means the ripples are
+--                 right in headless modes, where the playhead never moves.
+--
+-- `elapsed` is the clock, and it is the TABLE's: seconds accumulated from the
+-- frame's own `dt` since this region started, reset to zero every time one
+-- starts. It is what the bar and block quantisation is measured against. It
+-- cannot drift across loops because it never survives one, and if it is a
+-- few milliseconds out inside a loop then a switch lands a few milliseconds
+-- off a bar line, which is the smallest failure available here.
+--
+-- `sessionDeals` and `sessionWins` live here rather than on the table because
 -- the table is rebuilt (a re-deal, a hot reload, a second context) and a
 -- session is not. They are the only memory Sealitaire has: the .riv cannot
 -- write anything, so this counts up from the moment the tab opened and starts
 -- again when it closes. That is the whole scope of "progress" here.
 -- ---------------------------------------------------------------------------
+
 -- WHEN A QUEUED CHANGE IS ALLOWED TO LAND. Three, and each one is a
 -- different answer to "how late may this be":
 --
---   AT_PHRASE  when the loop runs out. For a change nothing is waiting on.
+--   AT_PHRASE  when the region runs out. For a change nothing waits on.
 --   AT_BLOCK   the next four-bar cell, the grid the bounce is built on. For
 --              an escalation: within ten seconds of the card that earned it,
 --              and still on a line the music was written to.
 --   AT_BAR     the next bar, 2.55s. For the win, which must be immediate.
---
--- The grids are the FILE's, counted from its start, so they survive a region
--- change — every region begins on a bar and on a block.
 local AT_PHRASE, AT_BLOCK, AT_BAR = 0, 1, 2
+
+-- How near the end of a region `completed` is believed. A quarter second is
+-- far longer than any clock drift across one region and far shorter than any
+-- region, so it can correct a short asset and can never be triggered by a
+-- handle that answers yes the moment it is asked.
+local BACKSTOP = 0.25
+
+local playing = 0        -- index into music.loops, 0 = nothing sounding
+local elapsed = 0        -- seconds into that region, from the frame's own dt
+local queued = 0         -- what to switch to, 0 = nothing waiting
+local queueAt = AT_PHRASE
+local sessionDeals = 0
+local sessionWins = 0
 
 -- THE RUNG REACHED, and it does not come back down inside a deal.
 --
@@ -164,67 +194,56 @@ local AT_PHRASE, AT_BLOCK, AT_BAR = 0, 1, 2
 -- Unlocking is a one-way event within a deal. This is the latch that makes
 -- it one, and `noteDeal` is the only thing that lets go of it.
 local rungHigh = 0
-local playing = 0        -- index into music.loops, 0 = nothing placed yet
-local queued = 0         -- what to switch to, 0 = nothing waiting
-local queueAt = AT_PHRASE
-local lastT = -1         -- last playhead read, for the grid-crossing test
-local sessionDeals = 0
-local sessionWins = 0
+
 -- The ring-out voice, so a second win (or a re-deal) can cut a wash that is
 -- still going rather than layering a second one over it.
 local washSound: AudioSound? = nil
 local washVolume = 1.0
+
+-- `musicDebug` in tuning.luau, in seconds; 0 is off. Counted in CALLS rather
+-- than against a clock, so an instrument wired to a suspect clock cannot go
+-- quiet exactly when the fault is that the clock stopped.
+local debugEvery = 0
+local beatCalls = 0
 
 -- A HOT RELOAD LEAVES A TRACK NOBODY CAN REACH.
 --
 -- The CLI's watcher rebuilds in the SAME PROCESS. The scripting context is
 -- new — this module is loaded again and `current` above is nil — but the
 -- audio engine is not: its clock carries straight on, and so does the sound
--- the previous context started. Measured, by printing `Audio.time()` at
--- module load and at every play:
---
---   MUSICMOD loaded engine=0       MUSICPLAY engine=0      first run
---   -- a file changes, the watcher rebuilds --
---   MUSICMOD loaded engine=7.78    MUSICPLAY engine=7.84   a SECOND track
---
--- The first one is still playing and there is no handle to it anywhere in the
+-- the previous context started. There is no handle to it anywhere in the
 -- script API: no enumerate, no stop-all, and an AudioSound cannot be parked
--- in a view model. Nothing this module does can stop it. So it must not add
--- to it — a tuning session is a save every few seconds, and that is a track
--- every few seconds, all of them playing at once.
+-- in a view model. Nothing here can stop it. So it must not add to it — a
+-- tuning session is a save every few seconds, and that is a track a second.
 --
--- The tell is the two clocks DIVERGING, not the engine clock being large. On
--- a fresh process the engine and the table both start at zero and stay within
--- a few hundred milliseconds of each other (the card sounds open the device
--- during the first deal, just before the music loads). After a reload the
--- table restarts at zero while the engine is minutes old. Comparing the two
--- is what makes this safe: a bare `Audio.time() > n` test would also refuse to
--- play on a fresh run that simply took a while to reach its first frame.
+-- The test is the engine's clock against THIS MODULE's: a fresh context
+-- starts `sinceLoad` at zero, so an engine that is already minutes old means
+-- somebody else's track is playing. A bare `Audio.time() > n` would also
+-- refuse on a first run that simply took a while to reach its first frame.
+--
+-- IT CAN ONLY EVER REFUSE TO START, never stall a transport that is already
+-- going, and a frozen engine clock makes `now - sinceLoad` negative, which
+-- fails the test and carries on. That is deliberate: this is the only thing
+-- left in the file that reads the audio clock, and it is arranged so that
+-- the clock being wrong costs a warning rather than the music.
 local RELOAD_GAP = 2.0
 local orphaned = false
+local sinceLoad = 0
 
--- Whether a previous context's track is still playing and out of reach, and
--- roughly where it is. It started at engine time zero, so the engine's own
--- clock modulo the track length IS its playhead — which is what keeps the
--- ripples in step with the sound that is actually audible.
-local function orphanPlayhead(duration: number): number
-    if duration <= 0 then
-        return 0
+local function checkOrphan(): boolean
+    if orphaned then
+        return true
     end
-    local now = Audio.time()
-    return now - math.floor(now / duration) * duration
-end
-
--- Whether the track may be started right now. Pure, and exported, because the
--- rule above is the whole fix and the runtime's audio globals cannot be stood
--- up in a `--test` run — the decision is testable even though the playing is
--- not. `have` is whether a sound exists at all, `completed` what it says of
--- itself, `now` and `last` the engine clock then and at the last start.
-local function mayStart(have: boolean, completed: boolean, now: number, last: number): boolean
-    if now - last < RESTART_GAP then
+    if current ~= nil or Audio.time() - sinceLoad <= RELOAD_GAP then
         return false
     end
-    return not have or completed
+    orphaned = true
+    print(
+        `sealitaire: the watcher rebuilt and the track from before is still playing — ` ..
+        `the engine survives a reload and the script cannot reach that sound. ` ..
+        `Not starting a second one; restart to clear it.`
+    )
+    return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -287,35 +306,13 @@ local function roleFor(loops: { Loop }, role: number, p: Progress): number
     return 0
 end
 
--- Where to seek when `loop` runs out at playhead `t` and `into` takes over.
+-- Did `elapsed` cross a line of this grid between `was` and `now`?
 --
--- THE OVERSHOOT IS CARRIED, and that is the whole of it. The playhead is read
--- once a frame, so by the time `t >= loop.endSec` is true the sound is
--- already a fraction of a frame past the end. Seeking to `into.startSec`
--- would throw that fraction away and every wrap would push the downbeat a
--- little later, which over a few minutes is a track that has drifted off its
--- own grid. Carrying it — start `t - endSec` INTO the new region — keeps the
--- bar line exactly where it was; what is lost instead is a few milliseconds
--- of audio at the seam, which is a wrap and is where nobody is listening.
---
--- The carry is capped at a bar so a stalled frame (a reload, a long GC) can
--- never skip past the new region's first downbeat.
-local function wrapTo(t: number, loop: Loop, into: Loop, barSeconds: number): number
-    local over = t - loop.endSec
-    if over < 0 then
-        over = 0
-    end
-    local cap = if barSeconds > 0 then barSeconds else 0.25
-    if over > cap then
-        over = 0
-    end
-    return into.startSec + over
-end
-
--- Did the playhead cross a line of this grid between `was` and `now`? The
--- grid is the FILE's, counted from its start, which is what makes it usable
--- across a region change: every region begins on a bar, so one grid serves
--- them all. Called with the bar for a win and the block for an escalation.
+-- The grid is counted from the START OF THE REGION, which is now the only
+-- thing it can be counted from: each region is its own asset and its own
+-- clock starting at zero. That is also the musically correct origin — every
+-- region is a whole number of bars cut on a downbeat, so its own bar one is
+-- the bounce's bar one as far as anything downstream can tell.
 local function crossedBar(was: number, now: number, grid: number): boolean
     if grid <= 0 or was < 0 or now < was then
         return false
@@ -323,178 +320,9 @@ local function crossedBar(was: number, now: number, grid: number): boolean
     return math.floor(now / grid) > math.floor(was / grid)
 end
 
--- Start the track if it is not going, restart it if it has run out, and keep
--- its volume current. Returns the one sound, or nil when there is no audio
--- device (every headless mode but --screenshot).
-local function keepPlaying(src: AudioSource, volume: number, tableTime: number): AudioSound?
-    local now = Audio.time()
-    if orphaned then
-        return nil
-    end
-    if current == nil and now - tableTime > RELOAD_GAP then
-        -- See RELOAD_GAP. Said once, plainly, because the symptom otherwise
-        -- reads as the music having stopped working.
-        orphaned = true
-        print(
-            `sealitaire: the watcher rebuilt and the track from before is still playing — ` ..
-            `the engine survives a reload and the script cannot reach that sound. ` ..
-            `Not starting a second one; restart to clear it.`
-        )
-        return nil
-    end
-    local sound = current
-    if mayStart(sound ~= nil, if sound ~= nil then sound:completed() else false, now, lastStart) then
-        lastStart = now
-        if sound ~= nil then
-            sound:stop()
-        end
-        current = Audio.play(src)
-    end
-    local c = current
-    if c ~= nil then
-        c.volume = volume
-    end
-    return c
-end
-
--- ---------------------------------------------------------------------------
--- STAYING INSIDE THE REGION
---
--- Called once a frame with the sound. Everything above decided WHAT; this is
--- the only thing that touches the playhead.
---
--- A seek is not instant on the engine's side, and the playhead is read once a
--- frame, so the frame after a seek can still report the old time and ask for
--- the same seek again. SEEK_GAP is the floor under that.
---
--- IT IS NOT A TIMER ANY MORE, and that matters. It used to be `Audio.time() -
--- lastSeek < SEEK_GAP`, which makes the whole transport depend on the engine
--- clock advancing. If `Audio.time()` ever sits still — and there is no
--- promise here that it does not, on a runtime where nothing else in this
--- module would notice — then after the very first seek that test is
--- `0 - 0 < 0.05`, true forever, and `follow` returns early on every frame
--- for the rest of the session. The music plays, the water ripples, and not
--- one gate, escalation or win ever fires again. There is no test that can
--- see that, because a test supplies its own clock and always advances it.
---
--- So the throttle is on the thing it is actually waiting for: the PLAYHEAD
--- moving away from where we just put it. That cannot wedge, because if the
--- playhead is not moving there is nothing to be late for.
-
--- ---------------------------------------------------------------------------
--- DOES SEEK ACTUALLY WORK HERE?
---
--- Everything in this file rests on one assumption: that `sound:seek(x)` moves
--- the playhead. If it does not — a runtime without the binding, or one that
--- accepts the call and ignores it — the bounce plays end to end and the loop
--- table, the gates and the win are all inert. It sounds like music. It is the
--- single failure mode of this design and it is invisible.
---
--- A PROBE HAS TO SEEK SOMEWHERE THE PLAYHEAD WAS NOT GOING ANYWAY, and the
--- first version of this did not. It armed on the first placement, which seeks
--- to the intro's start — ZERO, which is exactly where a sound that has just
--- started already is. It reported DEAD on the first run, and the reading was
--- worthless: a seek to where you already are cannot be told from no seek at
--- all. The intro handing over to the first bed is the same trap, because the
--- regions are contiguous and `wrapTo` carries the overshoot, so that seek
--- also lands where the playhead was going by itself.
---
--- So: arm only on a seek that MOVES the playhead a long way, and then decide
--- between the two hypotheses rather than against a threshold —
---
---   it worked   the playhead is near  target + elapsed
---   it did not  the playhead is near  where-it-was + elapsed
---
--- whichever is closer. That is unambiguous however long the frame took, and
--- a seek with nothing to do can never be mistaken for a broken one.
-local PROBE_JUMP = 2.0     -- a seek shorter than this proves nothing
-local PROBE_WAIT = 0.4     -- engine seconds to let the playhead settle
-
-local seekWorks = true     -- assumed until measured; the design needs it
-local seekTested = false
-local probeAimed = -1
-local probeFrom = -1
-local probeAt = -1
-local forceProbe = false
-
-local function armProbe(from: number, to: number, engine: number)
-    if seekTested or probeAimed >= 0 or math.abs(to - from) < PROBE_JUMP then
-        return
-    end
-    probeAimed, probeFrom, probeAt = to, from, engine
-end
-
-local function readProbe(t: number, engine: number)
-    if probeAimed < 0 or engine - probeAt < PROBE_WAIT then
-        return
-    end
-    local elapsed = engine - probeAt
-    local aimed, from = probeAimed, probeFrom
-    probeAimed = -1
-    seekTested = true
-    seekWorks = math.abs(t - (aimed + elapsed)) <= math.abs(t - (from + elapsed))
-    if seekWorks then
-        print(
-            `sealitaire: seek works — sent from {string.format('%.2f', from)}s to ` ..
-            `{string.format('%.2f', aimed)}s, playhead now {string.format('%.2f', t)}s. ` ..
-            `The loop table is live.`
-        )
-    else
-        print(
-            `sealitaire: SEEK DOES NOTHING on this runtime. Sent from ` ..
-            `{string.format('%.2f', from)}s to {string.format('%.2f', aimed)}s and the ` ..
-            `playhead is at {string.format('%.2f', t)}s — it carried straight on. ` ..
-            `The bounce plays end to end and musicLoops.csv, the gates and the win ` ..
-            `are all inert. The regions have to become their own assets.`
-        )
-    end
-end
-
--- The definitive version, behind `musicDebug`. Rather than wait for the first
--- long wrap — seventy seconds into this table — jump the playhead somewhere
--- it could not have reached on its own. It costs a fraction of a second of
--- the wrong bar, which is why it is not on by default and is exactly what you
--- want when you are standing in front of it asking the question.
-local function forceProbeSeek(self: Music, sound: any, t: number, engine: number)
-    if seekTested or probeAimed >= 0 or not forceProbe or self.duration <= 0 then
-        return
-    end
-    local to = if t < self.duration * 0.5 then self.duration * 0.75 else self.duration * 0.25
-    armProbe(t, to, engine)
-    sound:seek(to)
-end
-
-local SEEK_GAP = 0.05
-local lastSeek = -1000
-local lastSeekTo = -1
-local seekWarned = false
-
--- ---------------------------------------------------------------------------
--- THE HEARTBEAT. `musicDebug` in tuning.luau, in seconds; 0 is off.
---
--- Everything this module decides is decided against numbers nobody can see:
--- the playhead, the foundation count, which rung the ladder is on. When the
--- music does not do what the table expects, every one of those is equally
--- suspect and none of them is visible — and the loudest failure mode of all,
--- a playhead that is not moving, looks exactly like music playing normally.
---
--- `moved` is the one to read first. It is how far the playhead travelled
--- since the last beat, and it should be the beat interval. If it is ~0 the
--- sound is not advancing and nothing below it means anything; if it is the
--- interval but `loop` never changes, the fault is in the gates above.
--- Counted in CALLS, not seconds, for the same reason: an instrument wired to
--- the clock it is there to investigate goes quiet exactly when the fault is
--- that the clock stopped. `engine` is printed instead, so a frozen one is a
--- column that never changes rather than an absence of output.
-local debugEvery = 0
-local beatCalls = 0
-local beatHead = -1
-
-
-
--- Throw `loop` into its baked ring-out. A second voice, started in the same
--- frame the music is cut — see THE WASH in tools/sealitaire-music.mjs for why
--- this is an asset and not an effect.
+-- Throw `loop` into its baked ring-out. A second voice, started in the frame
+-- the music is cut -- see THE WASH in tools/sealitaire-music.mjs for why this
+-- is an asset and not an effect.
 --
 -- A loop with no wash is not a failure and says nothing: `washSeconds` of 0
 -- in the CSV is how you turn one off, and the intro and the win itself have
@@ -519,180 +347,187 @@ local function fireWash(loop: Loop, volume: number)
     washSound = s
 end
 
--- `sound` is typed `any` and `engine` is passed in rather than read from
--- `Audio.time()` here. Both are so this function can be RUN in a test: there
--- is no audio device under `--test` and `Audio` does not exist there at all,
--- so a version that reached for either would be the one piece of new
--- machinery in this file that nothing could execute. It takes anything with
--- `time`, `seek` and `completed`, which an `AudioSound` is.
-local function follow(self: Music, sound: any, p: Progress, engine: number)
-    if sound == nil or not self.ready or #self.loops == 0 then
-        return
+-- THE ONE CALL THAT REACHES THE AUDIO ENGINE, behind a seam.
+--
+-- `Audio` does not exist in a `--test` run at all. Everything else in this
+-- module is arithmetic and can be executed there, and the transport has to
+-- be as well — it is the part that was wrong for two days while the pure
+-- decisions around it were provably right. So starting a sound goes through
+-- here and tests put their own in.
+--
+-- The seam is deliberately this narrow: one function, taking an asset and
+-- returning something with `completed`, `stop` and `volume`. A fake that
+-- satisfies it is five lines, which is what keeps the tests honest about
+-- what the runtime actually provides.
+local function engineStart(src: AudioSource): AudioSound?
+    return Audio.play(src)
+end
+local startSound: (AudioSource) -> any = engineStart
+
+-- Put `i` on. Stops whatever was sounding and starts that region's asset
+-- from its own zero, which is the only place an asset can start from and is
+-- exactly where every region begins.
+local function playLoop(self: Music, i: number, volume: number): boolean
+    local l = self.loops[i]
+    if l == nil or l.src == nil then
+        return false
     end
-    local t = sound:time()
+    local old = current
+    if old ~= nil then
+        old:stop()
+    end
+    local snd = startSound(l.src)
+    if snd == nil then
+        return false
+    end
+    snd.volume = volume
+    current = snd
+    playing = i
+    elapsed = 0
+    queued = 0
+    queueAt = AT_PHRASE
+    if l.role == 0 then
+        rungHigh = i
+    end
+    return true
+end
+
+-- What SHOULD be sounding, given the deal in front of us. Pure apart from
+-- the latch it reads.
+local function wantFor(self: Music, p: Progress): number
     local cur = self.loops[playing]
-    readProbe(t, engine)
-    if cur ~= nil then
-        forceProbeSeek(self, sound, t, engine)
+    -- A win is a state the deal has ended in. Nothing about the cards pulls
+    -- the music back out of it; only the next deal does, through noteDeal.
+    if cur ~= nil and cur.role == 2 then
+        return playing
     end
-    -- Still sitting where the last seek put it: the engine has not caught up
-    -- yet, so every decision below would be made against a stale playhead.
-    -- Bounded by the engine clock too, so a runtime that reports the seek
-    -- target back verbatim forever cannot stall it either.
-    if lastSeekTo >= 0 and math.abs(t - lastSeekTo) < 1e-4 and engine - lastSeek < SEEK_GAP then
-        return
+    local want = bedFor(self.loops, p)
+    -- Latched: the beds are in ladder order, so a lower index is a lower
+    -- rung and the deal never goes back down to one.
+    if want < rungHigh then
+        return rungHigh
+    end
+    return want
+end
+
+-- ---------------------------------------------------------------------------
+-- THE DRIVER. One call a frame; it owns everything above.
+--
+-- Returns the playhead to read the BAKE at -- the region's start in the
+-- original bounce plus how far into it we are -- because music.bin is still
+-- one analysis of the whole track and the regions are cut from it.
+-- ---------------------------------------------------------------------------
+local function drive(self: Music, dt: number, volume: number, p: Progress): number
+    if not self.ready or #self.loops == 0 then
+        return 0
+    end
+    sinceLoad += dt
+    if checkOrphan() then
+        return 0
     end
 
-    -- Before the seek gate, so a beat is never swallowed by it.
-    if debugEvery > 0 then
-        beatCalls += 1
-        if beatCalls >= debugEvery * 120 then
-            local moved = if beatHead < 0 then 0 else t - beatHead
-            beatCalls = 0
-            beatHead = t
-            print(
-                `music: head={string.format('%.2f', t)} moved={string.format('%+.2f', moved)} ` ..
-                `engine={string.format('%.2f', engine)} ` ..
-                `loop={if cur ~= nil then cur.id else '-'} rung={rungHigh} ` ..
-                `queued={queued}@{queueAt} found={p.foundations} score={p.score} ` ..
-                `seek={if not seekTested then '?' elseif seekWorks then 'ok' else 'DEAD'} ` ..
-                `wants={bedFor(self.loops, p)}`
-            )
-        end
-    end
-
-    -- Nothing placed yet. The intro if there is one and it is unlocked,
-    -- otherwise straight onto the ladder -- a table with no intro row must
-    -- still start playing.
-    if cur == nil then
+    -- Nothing going yet: the intro if there is one and it is unlocked,
+    -- otherwise straight onto the bottom rung. A table with no intro row
+    -- must still start playing.
+    if current == nil or playing == 0 then
         local i = roleFor(self.loops, 1, p)
         if i == 0 then
             i = bedFor(self.loops, p)
         end
-        if i == 0 then
-            return
+        if i ~= 0 then
+            playLoop(self, i, volume)
         end
-        playing = i
-        queued = 0
-        queueAt = AT_PHRASE
-        if self.loops[i].role == 0 then
-            rungHigh = i
-        end
-        lastSeek = engine
-        lastT = self.loops[i].startSec
-        lastSeekTo = lastT
-        armProbe(t, lastT, engine)
-        sound:seek(lastT)
-        return
+        local l0 = self.loops[playing]
+        return if l0 ~= nil then l0.startSec else 0
     end
+
+    local snd = current
+    if snd ~= nil then
+        snd.volume = volume
+    end
+    local was = elapsed
+    elapsed += dt
+    local cur = self.loops[playing]
 
     -- THE LADDER, WATCHED EVERY FRAME. Not at the phrase end: `deal` is
     -- twenty-four bars and `drift` is forty, so a rung that only changed
     -- there would arrive up to a minute and a half after the card that
     -- earned it, by which time the player has stopped connecting the two.
-    -- The escalation is noticed here and lands at the next BLOCK.
-    --
-    -- A win outranks it: role 2 is a state the deal has ended in, and a
-    -- foundation count cannot pull the music back out of it.
-    if cur.role == 0 and queued == 0 then
-        local want = bedFor(self.loops, p)
-        -- Latched: the beds are in ladder order, so a lower index is a lower
-        -- rung and the deal never goes back to one.
-        if want < rungHigh then
-            want = rungHigh
-        elseif want ~= 0 then
-            rungHigh = want
-        end
+    if queued == 0 then
+        local want = wantFor(self, p)
         if want ~= 0 and want ~= playing then
             queued = want
-            queueAt = AT_BLOCK
+            -- A win is heard immediately, at the next BAR. An escalation
+            -- waits for the next BLOCK, the cell the bounce is built from.
+            queueAt = if self.loops[want].role == 2 then AT_BAR else AT_BLOCK
         end
     end
 
-    -- A queued switch that will not wait for the phrase. The win lands on the
-    -- next BAR so it is heard as part of the music rather than as an edit; an
-    -- escalation lands on the next BLOCK, the cell the bounce is built from.
+    -- THE REGION HAS RUN OUT — and the clock says so, not the sound.
+    --
+    -- There is no loop flag on an AudioSound, so a region repeats by being
+    -- played again. The question is what counts as finished, and `completed`
+    -- alone is not safe: a handle to a sound somebody else stopped answers
+    -- yes having played nothing, and at a hundred and twenty advances a
+    -- second one spurious yes becomes a new voice every frame. The old
+    -- single-track loop needed a one-second floor under that answer.
+    --
+    -- Here the region's LENGTH is known exactly — it is a whole number of
+    -- bars, cut by the baker and checked by test:sealitaireloops — so the
+    -- clock can answer instead, and it answers at the right musical instant
+    -- rather than a frame or two after the file ran dry. `completed` is kept
+    -- as a backstop for the other direction: an asset SHORTER than its row
+    -- claims would otherwise play silence until the clock caught up. It is
+    -- only believed near the end, which is the whole of the old guard
+    -- expressed as a fact about this region instead of a stopwatch.
+    local length = cur.endSec - cur.startSec
+    local ranOut = elapsed >= length
+        or (snd ~= nil and snd:completed() and elapsed >= length - BACKSTOP)
+    if snd == nil or ranOut then
+        local into = if queued ~= 0 then queued else wantFor(self, p)
+        if into == 0 then
+            into = playing
+        end
+        if into ~= playing and self.loops[into].role == 2 then
+            fireWash(cur, washVolume)
+        end
+        playLoop(self, into, volume)
+        local l = self.loops[playing]
+        return if l ~= nil then l.startSec else 0
+    end
+
+    -- A queued change that will not wait for the region to finish.
     if queued ~= 0 and queueAt ~= AT_PHRASE then
         local grid = if queueAt == AT_BAR then self.barSeconds else self.blockSeconds
-        if crossedBar(lastT, t, grid) then
+        if crossedBar(was, elapsed, grid) then
             local into = self.loops[queued]
             -- THE WASH GOES WITH THE CUT, not with the new loop. It is the
-            -- ring-out of what was playing, so it is `cur`'s, and it has to
-            -- start in the same frame the music is taken away -- a wash that
+            -- ring-out of what was playing, so it is `cur`'s, and it starts
+            -- in the same frame the music is taken away -- a wash that
             -- arrives after the cut is a reverb with a gap in front of it.
             if into.role == 2 then
                 fireWash(cur, washVolume)
             end
-            print(`music: {cur.id} -> {into.id} at {string.format('%.2f', t)} (queued, {if queueAt == AT_BAR then 'bar' else 'block'})`)
-            playing = queued
-            queued = 0
-            queueAt = AT_PHRASE
-            lastSeek = engine
-            lastT = into.startSec
-            lastSeekTo = lastT
-            armProbe(t, lastT, engine)
-            sound:seek(lastT)
-            return
+            playLoop(self, queued, volume)
+            local l = self.loops[playing]
+            return if l ~= nil then l.startSec else 0
         end
     end
 
-    -- The playhead is BEFORE the region. Not a wrap -- the sound was restarted
-    -- under us (a completed track, a re-play) and is back at zero. Put it
-    -- back where it was; advancing the ladder here would silently skip a
-    -- rung every time the track ran out.
-    if t < cur.startSec then
-        lastSeek = engine
-        lastT = cur.startSec
-        lastSeekTo = lastT
-        sound:seek(lastT)
-        return
+    if debugEvery > 0 then
+        beatCalls += 1
+        if beatCalls >= debugEvery * 120 then
+            beatCalls = 0
+            print(
+                `music: loop={cur.id} at={string.format('%.2f', elapsed)}/` ..
+                `{string.format('%.2f', cur.endSec - cur.startSec)} rung={rungHigh} ` ..
+                `queued={queued}@{queueAt} found={p.foundations} score={p.score} ` ..
+                `wants={wantFor(self, p)}`
+            )
+        end
     end
 
-    if t < cur.endSec and not sound:completed() then
-        lastT = t
-        return
-    end
-
-    -- The phrase is over. Whatever was queued; otherwise the ladder's rung,
-    -- which is usually the loop that just finished and so is a repeat.
-    --
-    -- A WIN HOLDS. It repeats itself until the next deal rather than handing
-    -- back to a bed: the deal is over, and music that wanders back to the
-    -- playing bed thirty seconds after a win is the game forgetting.
-    local into = queued
-    if into == 0 then
-        into = if cur.role == 2 then playing else bedFor(self.loops, p)
-    end
-    if into == 0 then
-        into = playing
-    end
-    local to = wrapTo(t, cur, self.loops[into], self.barSeconds)
-    if into ~= playing then
-        print(`music: {cur.id} -> {self.loops[into].id} at {string.format('%.2f', t)} (phrase end)`)
-    end
-    playing = into
-    queued = 0
-    queueAt = AT_PHRASE
-    lastSeek = engine
-    lastT = to
-    lastSeekTo = to
-    armProbe(t, to, engine)
-    sound:seek(to)
-    -- IF SEEKING DOES NOT WORK, THIS IS THE ONLY THING THAT WILL SAY SO.
-    --
-    -- A `seek` that is silently a no-op on some runtime is not an error and
-    -- not a silence: the track simply plays straight through from end to end
-    -- and the loops, the gates and the win all do nothing, which sounds
-    -- exactly like music. The tell is that the playhead keeps sailing past
-    -- the same region end and every wrap is asked for again. Said once.
-    if not seekWarned and math.abs(sound:time() - to) > 1 then
-        seekWarned = true
-        print(
-            `sealitaire: asked the track to seek to {to}s and it is at {sound:time()}s — ` ..
-            `if this runtime cannot seek, the loop table does nothing and the bounce ` ..
-            `plays end to end.`
-        )
-    end
+    return cur.startSec + elapsed
 end
 
 -- ---------------------------------------------------------------------------
@@ -762,8 +597,6 @@ end
 local function setMix(wash: number, debug: number)
     washVolume = wash
     debugEvery = debug
-    -- Any debug at all asks the definitive question; see forceProbeSeek.
-    forceProbe = debug > 0
 end
 
 -- The region playing right now, for the headless clock. Every mode that has
@@ -879,6 +712,7 @@ local function parse(self: Music, data: buffer): boolean
             gate = buffer.readu8(data, o + 25),
             gateN = buffer.readf32(data, o + 28),
             washSeconds = buffer.readf32(data, o + 32),
+            src = nil,
             wash = nil,
         }
     end
@@ -903,18 +737,31 @@ local function load(self: Music, context: Context): boolean
     if not parse(self, blob.data) then
         return false
     end
-    -- THE WASHES ARE RESOLVED HERE, ONCE. `context:audio` is a lookup and
-    -- doing it at the moment of a win would put it in the one frame that
-    -- cannot afford to be wrong. A missing one is named and costs that loop
-    -- its ring-out; the bake and tools/sealitaire-loops-test.mjs are what
-    -- keep it from happening.
+    -- THE ASSETS ARE RESOLVED HERE, ONCE. `context:audio` is a lookup and
+    -- doing it at the moment of a win, or of a rung changing, would put it
+    -- in the one frame that cannot afford to be wrong. Anything missing is
+    -- named: a region without its asset is simply never played, which is a
+    -- gap in the ladder and exactly the kind of silence that otherwise gets
+    -- blamed on the gates. tools/sealitaire-loops-test.mjs is what keeps it
+    -- from happening in the first place.
+    local missing = 0
     for _, l in ipairs(self.loops) do
+        l.src = context:audio(l.id)
+        if l.src == nil then
+            missing += 1
+            print(`sealitaire: music/{l.id}.flac missing; the "{l.id}" loop can never play`)
+        end
         if l.washSeconds > 0 then
             l.wash = context:audio(`wash-{l.id}`)
             if l.wash == nil then
                 print(`sealitaire: music/wash-{l.id}.flac missing; "{l.id}" will cut without a ring-out`)
             end
         end
+    end
+    if missing >= #self.loops then
+        print('sealitaire: no music assets resolved at all; no music')
+        self.ready = false
+        return false
     end
     return true
 end
@@ -1011,41 +858,39 @@ return {
     new = new,
     load = load,
     parse = parse,
-    keepPlaying = keepPlaying,
-    orphanPlayhead = orphanPlayhead,
-    isOrphaned = function(): boolean return orphaned end,
-    mayStart = mayStart,
-    RESTART_GAP = RESTART_GAP,
-    follow = follow,
+    drive = drive,
+    step = step,
+    sample = sample,
+    -- The decisions, pure and separately testable: `--test` has no audio
+    -- device and never will, so anything that matters has to be reachable
+    -- without one.
     unlocked = unlocked,
     bedFor = bedFor,
     roleFor = roleFor,
-    setMix = setMix,
-    -- '?' until a long seek has been measured, then 'ok' or 'dead'. The
-    -- verdict decides whether this whole design works, so it is testable.
-    seekVerdict = function(): string
-        return if not seekTested then '?' elseif seekWorks then 'ok' else 'dead'
-    end,
-    wrapTo = wrapTo,
     crossedBar = crossedBar,
     noteDeal = noteDeal,
     noteWin = noteWin,
     progress = progress,
     currentLoop = currentLoop,
-    -- The transport, for tests and for the tuner's readout. Written only by
-    -- `follow` and the two note* events above.
-    playingIndex = function(): number return playing end,
-    queuedIndex = function(): number return queued end,
-    resetTransport = function()
-        playing, queued, queueAt, lastT, lastSeek, rungHigh = 0, 0, AT_PHRASE, -1, -1000, 0
-        lastSeekTo, seekTested, seekWorks, probeAimed = -1, false, true, -1
-        seekWarned = false
-        washSound = nil
-        sessionDeals, sessionWins = 0, 0
+    setMix = setMix,
+    -- Tests only; production never calls this and `startSound` defaults to
+    -- the engine.
+    setPlayer = function(fn: ((AudioSource) -> any)?)
+        startSound = if fn ~= nil then fn else engineStart
     end,
-    step = step,
-    sample = sample,
+    isOrphaned = function(): boolean return orphaned end,
+    RELOAD_GAP = RELOAD_GAP,
     FIRE = FIRE,
     REFRACTORY = REFRACTORY,
     GAP = GAP,
+    -- The transport, for tests and the tuner's readout.
+    playingIndex = function(): number return playing end,
+    queuedIndex = function(): number return queued end,
+    elapsedIn = function(): number return elapsed end,
+    resetTransport = function()
+        playing, elapsed, queued, queueAt, rungHigh = 0, 0, 0, AT_PHRASE, 0
+        sessionDeals, sessionWins = 0, 0
+        current, washSound = nil, nil
+        orphaned, sinceLoad = false, 0
+    end,
 }

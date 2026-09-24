@@ -41,6 +41,7 @@ local TUNING = require('tuning')
 local KNOCK = require('knock')
 local HOVER = require('hover')
 local REACT = require('react')
+local CASCADE = require('cascade')
 local PUPPET = require('puppet')
 local BAIT = require('baitball')
 local RIG = require('tankrig')
@@ -210,10 +211,34 @@ local CRT_UBO = CRT_HEAD + TANK_SLOTS * CRT_ENTRY
 local CAM = { dist = 3.2, fov = 44, zFront = 1.0, zBack = -1.4 }
 local WALLS: BAIT.Walls = { dist = CAM.dist, tanHalf = math.tan(math.rad(CAM.fov / 2)), aspect = CARD_W / CARD_H, zFront = CAM.zFront, zBack = CAM.zBack }
 local SUIT_NAMES = { 'fish', 'star', 'bubble', 'shell' }
--- The fallback tank backgrounds, for a tanks.csv row whose `bg` is blank.
--- Warm behind a red suit, cold behind a black one.
-local SUIT_BG_RED = { 0.11, 0.06, 0.12 }
-local SUIT_BG_BLACK = { 0.03, 0.13, 0.24 }
+-- THE TANK BACKGROUND IS THE SUIT'S. A card's family is decided at the suit,
+-- so the colour lives there — four tuner rows per channel, live, so dragging
+-- one repaints thirteen cards while you watch rather than after a save and a
+-- rebuild. It used to be two constants, warm for a red suit and cold for a
+-- black one, which could not tell Heart from Diamond at all.
+--
+-- A tanks.csv `bg` cell still beats it, for the one card that wants its own
+-- water; blank — which is every row now — reads the suit's.
+--
+-- Its key list and its buffer are inside a `do` block and only the function
+-- escapes, because this file is AT LUAU'S 200 TOP-LEVEL LOCAL CEILING: three
+-- more file-scope names and the compiler refuses the chunk with "Out of local
+-- registers", naming whichever `local function` happened to come next rather
+-- than the ones that filled it. A block's locals are released at its `end`.
+local suitBg: (number) -> { number }
+do
+    local KEYS = { 'bgFish', 'bgStar', 'bgBubble', 'bgShell' }
+    -- Into a per-suit buffer rather than a fresh list: this is read once per
+    -- card per frame, and 52 three-element tables a frame is 52 tables for the
+    -- collector to walk for a colour that has not moved.
+    local buf = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } }
+    function suitBg(suit: number): { number }
+        local k = KEYS[suit] or KEYS[1]
+        local out = buf[suit] or buf[1]
+        out[1], out[2], out[3] = T[k .. 'R'], T[k .. 'G'], T[k .. 'B']
+        return out
+    end
+end
 -- The tuner panel: rows and headers are small artboards the script lays out
 -- in columns, a category folding on its header. `L.tuner` sizes and places
 -- it — right-anchored, one column where two will not fit, scaled down on a
@@ -240,6 +265,8 @@ type View = {
     z: number,
     phase: number,         -- idle sway offset
     fanLift: number,       -- the stock fan's extra shadow
+    fanK: number,          -- spring the ribbon wants instead of the table's, or 0
+    fanD: number,          -- ...and the damping that goes with it
     dealt: boolean,
     inst: Artboard<Data.Card>?,
     ink: Artboard<Data.Card>?,   -- the same face with the plate hidden: a tank card's ink
@@ -276,7 +303,9 @@ type Species = {
 -- (pipColGap, pipRowGap, fishPadX, fishPadY) and is saved back as a blank cell.
 type TankRec = {
     species: Species, rank: number, count: number, size: number,
-    back: { number }, belly: { number }, bg: { number },
+    suit: number,                    -- 1..4, the index into SUIT_NAMES: which water this card falls back to
+    back: { number }, belly: { number },
+    bg: { number }?,                 -- the card's OWN background; nil reads the suit's (suitBg)
     -- The sfxEvents.csv event this card's bodies knock with. '' means the
     -- default, `tankWall` — a flick-plop. A card holding something big names
     -- a heavier row here (tanks.csv `knock`), because one sample cannot be
@@ -312,8 +341,10 @@ local function copyTank(rec: TankRec): TankRec
         bioColor = { rec.bioColor[1], rec.bioColor[2], rec.bioColor[3] },
         back = { rec.back[1], rec.back[2], rec.back[3] },
         belly = { rec.belly[1], rec.belly[2], rec.belly[3] },
-        bg = { rec.bg[1], rec.bg[2], rec.bg[3] },
+        suit = rec.suit,
     }
+    local bg = rec.bg
+    out.bg = if bg ~= nil then { bg[1], bg[2], bg[3] } else nil
     out.colGap, out.rowGap, out.padX, out.padY = rec.colGap, rec.rowGap, rec.padX, rec.padY
     out.drop, out.rotate, out.rotateVary = rec.drop, rec.rotate, rec.rotateVary
     out.yaw, out.roll, out.sway, out.loop = rec.yaw, rec.roll, rec.sway, rec.loop
@@ -401,6 +432,18 @@ type Table = {
     subjectRowVm: { ViewModel },
     subjectHead: Artboard<Data.TunerHead>?, subjectHeadVm: ViewModel?,
     suitHead: Artboard<Data.TunerHead>?, suitHeadVm: ViewModel?,
+    -- THE LAST SOUND THAT ACTUALLY PLAYED, shown on the tuner's top row.
+    -- A cast that resolves to nothing, a missing ladder rung, an event
+    -- firing twice — none of it is visible, and reading the console while
+    -- playing is not a thing anyone does.
+    --
+    -- Carried as a plain string on an EXISTING head artboard (one past SAVE
+    -- and RESET) rather than a new one: adding a second Artboard field here
+    -- pushed Luau's inference over its budget and the build failed with
+    -- "code is too complex to typecheck" pointing a thousand lines away, in
+    -- loadTankTable, which this never touched.
+    sfxLastLine: string,
+    sfxHoverLast: number,   -- the card the hover blip last fired for, on the RAW edge
     pool: { Species },      -- every species in the pack but the bubble, by name
     tankOrig: { TankRec },  -- by card id: the row as tanks.csv had it, for RESET
     tankDirty: { [number]: boolean },  -- card ids the panel has changed since load
@@ -417,6 +460,9 @@ type Table = {
     stockHovered: boolean,
     stockFan: number,       -- 0..1, eased
     stockPulse: number,     -- a click's drop, decaying
+    stockHold: number,      -- seconds the deck has been held down, or -1
+    stockHoldPad: boolean,  -- ...by the pad's south button, which has no release event
+    stockWind: number,      -- 0..1 eased: the wind-up the hold is drawing back
 
     -- The swimmer: the level-up seal's blender, pull and clip controller.
     puppet: PUPPET.Puppet,
@@ -448,6 +494,7 @@ type Table = {
     reactSeq: number,       -- bumped on every valid play; the puppet reacts to a new number
     reactVariant: string,   -- the reaction picked for it
     reactLast: string,      -- the one before, so the next is different
+    cascade: CASCADE.State?, -- the win's cascade, while one is running
     hoverRaw: number,       -- what the pointer is over right now, after the spatial guard
     hoverPending: number,   -- the raw target waiting out the settle time
     hoverSince: number,     -- when it started waiting
@@ -497,7 +544,6 @@ type Table = {
     musicRipples: { Ripple },
     music: MUSIC.Music,
     sound: AudioSound?,
-    musicSource: AudioSource?,
     musicTried: boolean,
     muted: boolean,
     sfxIndex: number,       -- the card sound last auditioned (J/K/L), 0 before any
@@ -521,10 +567,7 @@ type Table = {
     knockLast: number,      -- engine seconds one last sounded
     dealt: boolean,             -- a deal has happened: the next one is a re-deal
     muteWas: number,        -- the volume to come back to
-    musicTime: number,      -- the playhead the analysis is read at
     beat: number,           -- 0..1, kicked by a band onset and decaying: what the black suits' glow pulses on
-    soundLast: number,      -- the last reading off the sound itself
-    soundStill: number,     -- seconds that reading has not changed
     vortexCentre: Vector,
     win: number,            -- seconds since the win, or -1
 
@@ -706,7 +749,20 @@ local hoverFall = 1
 -- table, and every one of these is scratch that a second one would want its own
 -- copy of anyway. The reason it is not on `Table` is that this module sits on
 -- Luau's type-inference budget and that record is the thing that breaks it.
-local flight = { id = 0, t = 0, x = 0, y = 0 }
+-- The card crossing to the waste. `spin` is how many HALF turns it takes —
+-- always odd, so however hard it was thrown it lands face up — and `power` is
+-- the wind-up that threw it, 0 for a tap.
+-- The card crossing to the waste, and what the wind-up that threw it bought
+-- on the way over: `spin` is how many HALF turns it takes — always odd, since
+-- the face swaps every half and an even count would land the card on its own
+-- back — and `time` is how long it has to take them in.
+--
+-- FIELDS RATHER THAN TWO SMALL FUNCTIONS OF `power`, which is what they were
+-- first: the main chunk of this module is near Luau's 200-local ceiling and a
+-- top-level `local function` costs one of those registers. It is not a limit
+-- you find by reading — the build says `0 errors` and the table simply never
+-- runs, with one line about registers above it.
+local flight = { id = 0, t = 0, x = 0, y = 0, power = 0, spin = 1, time = 0.42 }
 
 local function popRise(g: LAYOUT.Geom, v: View): number
     return -T.popRise * g.fit * v.pop.pop * hoverFall
@@ -802,6 +858,9 @@ local function relayout(self: Table)
             v.tx, v.ty, v.z = x, y, z
             v.trot = 0
             v.tscale = 1
+            -- The ribbon's soft spring is re-asked for every frame it is
+            -- wanted, so a card that has left the stock cannot keep it.
+            v.fanK, v.fanD = 0, 0
             v.tflip = if card.faceUp then 1 else 0
         end
     end
@@ -974,7 +1033,8 @@ local function playSfx(self: Table, event: string, level: number?): AudioSound?
         return nil
     end
     ev.lastAt = now
-    local src = ctx:audio(ev.takes[math.random(1, #ev.takes)])
+    local take = ev.takes[math.random(1, #ev.takes)]
+    local src = ctx:audio(take)
     if src == nil then
         return nil
     end
@@ -983,6 +1043,11 @@ local function playSfx(self: Table, event: string, level: number?): AudioSound?
     end)
     if ok and snd ~= nil then
         snd.volume = if self.muted then 0 else T.sfxVolume * ev.gain * (level or 1)
+        -- Recorded where the voice actually STARTS, not where the event was
+        -- asked for: a minGap swallow or a missing take must not show as a
+        -- sound that played, or the readout lies exactly when it is being
+        -- used to find out why nothing was heard.
+        self.sfxLastLine = event .. '  ' .. take
         table.insert(self.sfxRecent, snd)
         if #self.sfxRecent > 12 then
             table.remove(self.sfxRecent, 1)
@@ -1090,7 +1155,25 @@ end
 --
 -- Falls back to the unpitched take if the rung is missing, so a bank baked
 -- before `sfx:fx hover` ran still makes a noise rather than going silent.
-local function playCardHover(self: Table, depth: number)
+-- A BLIP FOR A HOVERED CARD, pitched by how deep its pile is.
+--
+-- Takes the card ID and finds the depth itself. That lookup was its own
+-- function and is folded in here because table.luau is AT LUAU'S 200
+-- TOP-LEVEL LOCAL LIMIT — 121 of them are functions — and every
+-- `local function` at file scope costs one. Going over does not fail the
+-- build: `rive --verify` passes, the tests pass, and the table does not
+-- come up, with `Out of local registers when trying to allocate <the next
+-- function declared>` in build/problems.log naming something innocent.
+local function playCardHover(self: Table, id: number)
+    local depth = 1
+    for _, p in ipairs(K.piles(self.game)) do
+        for _, c in ipairs(p.cards) do
+            if c.id == id then
+                depth = #p.cards
+                break
+            end
+        end
+    end
     local ctx = self.context
     local ev = self.sfx['cardHover']
     if ctx == nil or ev == nil or #ev.takes == 0 then
@@ -1112,6 +1195,7 @@ local function playCardHover(self: Table, depth: number)
     end)
     if ok and snd ~= nil then
         snd.volume = if self.muted then 0 else T.sfxVolume * ev.gain
+        self.sfxLastLine = 'cardHover  ' .. take .. '-h' .. tostring(k) .. '  d' .. tostring(depth)
         table.insert(self.sfxRecent, snd)
         if #self.sfxRecent > 12 then
             table.remove(self.sfxRecent, 1)
@@ -1154,6 +1238,7 @@ local function playKnock(self: Table, level: number, len: number)
             end
         end
     end
+    self.sfxLastLine = 'tankWall  ' .. take .. '-p' .. tostring(k)
     voice(dry, gain)
     if T.busSend > 0 then
         local lo, hi, wlo, whi = KNOCK.sweep(T.busSweep)
@@ -1162,6 +1247,67 @@ local function playKnock(self: Table, level: number, len: number)
             voice(ctx:audio(`knockbus-p{k}-c{hi}`), gain * T.busSend * whi)
         end
     end
+end
+
+-- THE CASCADE. Every card the foundations hold, thrown off them one at a
+-- time (cascade.luau). Built from the piles AS THEY STAND, so the C key can
+-- run it on an unfinished game and a real win runs the same code with four
+-- full piles — there is no second path to keep true.
+--
+-- The cards leave the game's own layout behind while it runs: `relayout` is
+-- not called and each view is written directly, because a bounce chased by
+-- the card spring is a smear rather than a bounce.
+local function startCascade(self: Table)
+    local g = self.L
+    local piles: { { number } } = {}
+    local from: { { x: number, y: number } } = {}
+    for _, p in ipairs(K.piles(self.game)) do
+        if p.kind == 'foundation' then
+            local ids: { number } = {}
+            for _, c in ipairs(p.cards) do
+                table.insert(ids, c.id)
+            end
+            table.insert(piles, ids)
+            local x, y = pileOrigin(g, p)
+            table.insert(from, { x = x, y = y })
+            -- (`from` is per PILE, so a rehearsal's four stacks leave from the
+            -- four real slots rather than from one.)
+        end
+    end
+    local order = CASCADE.order(piles)
+    -- THE REHEARSAL. With nothing on the foundations there is nothing to
+    -- throw, and a look that can only be seen by winning cannot be tuned. So
+    -- C on an unfinished game builds what a WIN would have left: thirteen of
+    -- each suit on their own pile, ace at the bottom. That is not a stand-in
+    -- for the real cascade, it is the same 52 cards in the same four stacks
+    -- running the same code — the only difference is that the game underneath
+    -- is not over, and the next deal clears it.
+    local rehearsal = #order == 0
+    if rehearsal then
+        for suit = 1, 4 do
+            local ids: { number } = {}
+            for rank = 1, 13 do
+                table.insert(ids, (suit - 1) * 13 + rank)
+            end
+            piles[suit] = ids
+        end
+        order = CASCADE.order(piles)
+    end
+    if #order == 0 then
+        print('sealitaire: no cards to cascade')
+        return
+    end
+    self.cascade = CASCADE.new(order, from)
+    self.win = 0
+    -- Every cascading card is face up and above the table; the ones still in
+    -- the tableau stay where they are and are simply left behind.
+    for _, c in ipairs(order) do
+        local v = self.views[c.id]
+        v.tflip = 1
+        v.vx, v.vy, v.vrot, v.vscale = 0, 0, 0, 0
+    end
+    self.orderDirty = true
+    print(`sealitaire: cascade — {#order} card(s) off the foundations{if rehearsal then ' (a rehearsal: the game is not won)' else ''}`)
 end
 
 local function deal(self: Table, seed: number)
@@ -1174,6 +1320,10 @@ local function deal(self: Table, seed: number)
     self.drag = nil
     self.hovered = 0
     self.win = -1
+    -- A deal ends a cascade mid-air: it writes every card's position each
+    -- frame, so one left running would hold the new deal's cards wherever
+    -- the old one had thrown them.
+    self.cascade = nil
     self.energy = 0.6
     MUSIC.noteDeal(self.music, K.founded(self.game), self.game.score, self.game.moves)
     -- Every card starts in the stock's corner and flies to its slot: the deal
@@ -1343,7 +1493,7 @@ local function tryMove(self: Table, from: K.Pile, index: number, to: K.Pile, sen
         playSfx(self, 'flip')
     end
     if self.game.won and self.win < 0 then
-        self.win = 0
+        startCascade(self)
         self.energy = 1.5
         -- The music's own win. Queued here, on the EDGE, rather than read off
         -- `game.won` every frame: `won` stays true for as long as the win
@@ -1354,14 +1504,18 @@ local function tryMove(self: Table, from: K.Pile, index: number, to: K.Pile, sen
     return true
 end
 
-local function drawStock(self: Table)
+-- `power` is the wind-up the release was holding, 0..1: a tap is 0 and is the
+-- draw this table always had. Everything it scales is the same gesture read
+-- harder — how many times the card turns over, how far toward the viewer it
+-- comes, how long it takes, how loud it is, how much of the water it throws.
+local function drawStock(self: Table, power: number)
     local result = K.draw(self.game)
     relayout(self)
     -- The flipper's flick across the deck. A recycle gets one too: it is still
     -- the deck handing the player cards.
     self.swipeT = 0
     if result == 'drew' then
-        playSfx(self, 'flip')
+        playSfx(self, 'flip', 0.7 + 0.5 * power)
         local top = K.top(self.game.waste)
         if top ~= nil then
             local v = self.views[top.id]
@@ -1371,9 +1525,38 @@ local function drawStock(self: Table)
             flight.id = top.id
             flight.t = 0
             flight.x, flight.y = v.x, v.y
+            flight.power = power
+            flight.spin = 1 + 2 * math.floor(power * T.holdFlip + 0.5)
+            flight.time = math.max(0.05, T.drawTime * (1 + power * T.holdTime))
             v.flip = 0
-            v.vrot = -3
-            ripple(self, v.tx, v.ty, 0.35)
+            v.vrot = -3 * (1 + power)
+            -- OVER THE RIBBON IT IS LEAVING. relayout has just put it back at
+            -- the waste's 200+, which is UNDER the fan still collapsing behind
+            -- it: the card the player clicked spent the first tenth of its
+            -- flight behind the deck, which is what made the draw look like it
+            -- came from inside the stack rather than off the top of it.
+            -- 4200: OUTSIDE THE PILES' Z ORDER, with the ribbon's head at
+            -- 4000. The piles run 100 (stock) to 1000+ (the tableau) and a
+            -- held run is 5000+, so these two sit between — the card under
+            -- the pointer and the card that was just taken off it each have
+            -- to be seen whole for as long as they are the thing the player
+            -- is looking at, whatever they happen to be crossing. The flight
+            -- is over the head because the head it left behind is the card
+            -- BELOW it in the deck. (Both numbers are written where they are
+            -- used: the main chunk is at Luau's 200-local ceiling, and two
+            -- named constants up here cost two of those registers.)
+            v.z = 4200
+            self.orderDirty = true
+            ripple(self, v.tx, v.ty, 0.35 + 0.75 * power)
+            -- THE WATER IT TEARS OFF WITH IT. Two halves: a burst thrown from
+            -- the card's edge as it leaves the ribbon, here, and a landing on
+            -- the waste that PUDDLE.advance fires when it settles — the first
+            -- is the pull, the second is the slap, and a hard draw wants both.
+            local drops = math.floor((1 + T.holdGoo * power) * T.gooSplash + 0.5)
+            if drops > 0 then
+                PUDDLE.splash(self.goo, v.x, v.y, self.L.cw / 2, self.L.ch / 2, 0.3 + 0.7 * power, drops, 0.18 + 0.5 * power)
+            end
+            PUDDLE.play(self.goo, { top.id }, 0.45 + 0.55 * power)
         end
     elseif result == 'recycled' then
         playSfx(self, 'recycle')
@@ -1383,6 +1566,21 @@ local function drawStock(self: Table)
             self.views[card.id].vrot = 2
         end
     end
+end
+
+-- THE HOLD, LET GO. `stockHold` is how long the deck has been under the
+-- finger and `holdFull` is what a full wind-up costs in seconds; past that it
+-- is simply full. A tap measures zero and draws exactly as it always has.
+local function releaseStock(self: Table)
+    local power = clamp(self.stockHold / math.max(0.05, T.holdFull), 0, 1)
+    self.stockHold = -1
+    self.stockHoldPad = false
+    -- The fan drops into the draw: the top card flips off the ribbon. The
+    -- rise's sound is choked here rather than left to be cut off by the fan's
+    -- own fall a frame later.
+    self.stockPulse = 1
+    chokeHover(self)
+    drawStock(self, power)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1444,7 +1642,13 @@ local function writeTunerHead(self: Table, c: number)
         end
     else
         if name ~= nil then
-            name.value = if c == n + 1 then 'SAVE' else 'RESET'
+            if c == n + 1 then
+                name.value = 'SAVE'
+            elseif c == n + 2 then
+                name.value = 'RESET'
+            else
+                name.value = self.sfxLastLine
+            end
         end
         if mark ~= nil then
             mark.value = ''
@@ -1460,6 +1664,9 @@ local function cardName(id: number): string
     return `{K.RANK_TEXT[rank]} {SUIT_NAMES[suit]}`
 end
 
+-- What a colour row WRITES INTO, in place. A bg the card does not own yet is
+-- seeded from its suit here: the first drag of a bg row is what makes this one
+-- card own its water, exactly as the first drag of `drop` makes it own a drop.
 local function colourOf(rec: TankRec, name: string): { number }
     if name == 'back' then
         return rec.back
@@ -1468,7 +1675,14 @@ local function colourOf(rec: TankRec, name: string): { number }
     elseif name == 'bioColor' then
         return rec.bioColor
     end
-    return rec.bg
+    local bg = rec.bg
+    if bg ~= nil then
+        return bg
+    end
+    local s = suitBg(rec.suit)
+    local own = { s[1], s[2], s[3] }
+    rec.bg = own
+    return own
 end
 
 local function subjectGet(self: Table, key: string): number
@@ -1494,6 +1708,13 @@ local function subjectGet(self: Table, key: string): number
     end
     local c = COLOUR_ROWS[key]
     if c ~= nil then
+        if c.name == 'bg' then
+            -- READING a bg must not materialise one: a panel that merely
+            -- showed a card would then have given it a tanks.csv cell it
+            -- never asked for. `colourOf` is the writing path.
+            local own = rec.bg
+            return (if own ~= nil then own else suitBg(rec.suit))[c.ch]
+        end
         return colourOf(rec, c.name)[c.ch]
     end
     local g = LAYOUT_ROWS[key]
@@ -1562,6 +1783,21 @@ local function subjectSet(self: Table, key: string, v: number)
     self.tankDirty[id] = true
 end
 
+-- Is this row showing a number the card does not own — the tuner's global for
+-- a layout row, the suit's water for a bg one? Both are blank cells, and both
+-- print with a tilde.
+local function inheritedRow(self: Table, key: string): boolean
+    local rec = self.tankOf[self.subject]
+    if rec == nil then
+        return false
+    end
+    if LAYOUT_ROWS[key] ~= nil then
+        return (rec :: any)[key] == nil
+    end
+    local c = COLOUR_ROWS[key]
+    return c ~= nil and c.name == 'bg' and rec.bg == nil
+end
+
 local function writeSubjectRow(self: Table, i: number)
     local vm = self.subjectRowVm[i]
     local row = SUBJECT_ROWS[i]
@@ -1582,9 +1818,11 @@ local function writeSubjectRow(self: Table, i: number)
             val.value = if sp ~= nil then sp.name else '?'
         elseif row.step > 0 then
             val.value = string.format('%d', math.floor(v + 0.5))
-        elseif LAYOUT_ROWS[row.key] ~= nil and self.tankOf[self.subject] ~= nil and (self.tankOf[self.subject] :: any)[row.key] == nil then
+        elseif inheritedRow(self, row.key) then
             -- Inherited from the tuner's global: shown with a tilde so a
             -- card that is on its own number can be told from one that is not.
+            -- A bg row reads it too, because a card with no `bg` cell is on
+            -- its SUIT's water and that is worth being able to see.
             val.value = '~' .. fmtValue(v)
         else
             val.value = fmtValue(v)
@@ -1633,7 +1871,7 @@ local function writeTuner(self: Table)
     for i = 1, #TUNING do
         writeTunerRow(self, i)
     end
-    for c = 1, #self.tunerCats + 2 do
+    for c = 1, #self.tunerCats + 3 do
         writeTunerHead(self, c)
     end
     writeSubject(self)
@@ -1664,6 +1902,9 @@ local function tunerLayout(self: Table)
     -- The card rows first: they are what the panel is opened FOR when a
     -- card is being designed, and a subject with no rows showing is a click
     -- that did nothing.
+    -- The sound readout FIRST: it changes on its own while you play, and a
+    -- readout you have to scroll to is one you stop reading.
+    place('head', #self.tunerCats + 3, tn.headH)
     place('shead', 1, tn.headH)
     if self.subjectOpen and self.subject > 0 and self.tankOf[self.subject] ~= nil then
         for i = 1, #SUBJECT_ROWS do
@@ -1787,7 +2028,12 @@ local function tunerSave(self: Table)
             local function opt(v: number?): string
                 return if v ~= nil then string.format('%.4g', v) else ''
             end
-            print(`TANKS-SAVE card={K.RANK_TEXT[rank]}:{SUIT_NAMES[suit]} model={rec.species.name} count={rec.count} size={string.format('%.4g', rec.size)} back={rgbHex(rec.back)} belly={rgbHex(rec.belly)} bg={rgbHex(rec.bg)} colGap={opt(rec.colGap)} rowGap={opt(rec.rowGap)} padX={opt(rec.padX)} padY={opt(rec.padY)} drop={opt(rec.drop)} rotate={opt(rec.rotate)} rotateVary={opt(rec.rotateVary)} yaw={opt(rec.yaw)} roll={opt(rec.roll)} sway={opt(rec.sway)} loop={opt(rec.loop)} bio={string.format('%.4g', rec.bio)} bioColor={rgbHex(rec.bioColor)} bioSpeed={opt(rec.bioSpeed)} bioScale={opt(rec.bioScale)} bioContrast={opt(rec.bioContrast)} bioCoverage={opt(rec.bioCoverage)} bioPan={opt(rec.bioPan)} bioEvolve={opt(rec.bioEvolve)}`)
+            -- Blank when the card is on its suit's water, so the cell the tool
+            -- writes back is the one the row started with rather than a copy
+            -- of the suit frozen into 52 rows.
+            local bgOwn = rec.bg
+            local bgCell = if bgOwn ~= nil then rgbHex(bgOwn) else ''
+            print(`TANKS-SAVE card={K.RANK_TEXT[rank]}:{SUIT_NAMES[suit]} model={rec.species.name} count={rec.count} size={string.format('%.4g', rec.size)} back={rgbHex(rec.back)} belly={rgbHex(rec.belly)} bg={bgCell} colGap={opt(rec.colGap)} rowGap={opt(rec.rowGap)} padX={opt(rec.padX)} padY={opt(rec.padY)} drop={opt(rec.drop)} rotate={opt(rec.rotate)} rotateVary={opt(rec.rotateVary)} yaw={opt(rec.yaw)} roll={opt(rec.roll)} sway={opt(rec.sway)} loop={opt(rec.loop)} bio={string.format('%.4g', rec.bio)} bioColor={rgbHex(rec.bioColor)} bioSpeed={opt(rec.bioSpeed)} bioScale={opt(rec.bioScale)} bioContrast={opt(rec.bioContrast)} bioCoverage={opt(rec.bioCoverage)} bioPan={opt(rec.bioPan)} bioEvolve={opt(rec.bioEvolve)}`)
         end
     end
 end
@@ -1806,7 +2052,8 @@ local function tunerReset(self: Table)
             rec.size = orig.size
             rec.back = { orig.back[1], orig.back[2], orig.back[3] }
             rec.belly = { orig.belly[1], orig.belly[2], orig.belly[3] }
-            rec.bg = { orig.bg[1], orig.bg[2], orig.bg[3] }
+            local ob = orig.bg
+            rec.bg = if ob ~= nil then { ob[1], ob[2], ob[3] } else nil
             rec.colGap, rec.rowGap, rec.padX, rec.padY = orig.colGap, orig.rowGap, orig.padX, orig.padY
             rec.drop, rec.rotate, rec.rotateVary = orig.drop, orig.rotate, orig.rotateVary
             rec.yaw, rec.roll, rec.sway, rec.loop = orig.yaw, orig.roll, orig.sway, orig.loop
@@ -1845,7 +2092,8 @@ local function spreadSuit(self: Table)
             o.size = rec.size
             o.back = { rec.back[1], rec.back[2], rec.back[3] }
             o.belly = { rec.belly[1], rec.belly[2], rec.belly[3] }
-            o.bg = { rec.bg[1], rec.bg[2], rec.bg[3] }
+            local rb = rec.bg
+            o.bg = if rb ~= nil then { rb[1], rb[2], rb[3] } else nil
             o.colGap, o.rowGap, o.padX, o.padY = rec.colGap, rec.rowGap, rec.padX, rec.padY
             o.drop, o.rotate, o.rotateVary = rec.drop, rec.rotate, rec.rotateVary
             o.yaw, o.roll, o.sway = rec.yaw, rec.roll, rec.sway
@@ -2001,6 +2249,101 @@ end
 -- does nudge the cursor on its way down.
 local TOUCH_SLACK = 3
 
+-- How far the stock's fan may rise: the tuner's stockRise, capped so the top
+-- card never covers a piece of chrome that stands over the deck's column and
+-- never leaves the window. The arithmetic is LAYOUT.fanRoom's, pure and
+-- tested there — it is geometry at a viewport like everything else in that
+-- file, and it was silently returning zero at every screen size for as long
+-- as the readouts have been at the foot.
+local function fanRoom(self: Table): number
+    local sx = pileOrigin(self.L, self.game.stock)
+    return LAYOUT.fanRoom(self.L, sx, T.stockRise, T.stockClear)
+end
+
+-- WHICH HOVER THE DECK HAS. `stockHover` 0 is THE PEEK: one card slides off
+-- the corner of the pile and everything under it stays a pile. 1 is THE
+-- RIBBON: the whole deck lifts into a chain with its head on the cursor, the
+-- wind-up throw and all. The ribbon is kept as a stub rather than deleted —
+-- it is a lot of table to throw away over one comparison, and the two are
+-- worth looking at side by side on the same build.
+local function ribbonHover(): boolean
+    return T.stockHover >= 0.5
+end
+
+-- HOW FAR THE PEEK SLIDES: up, and to the LEFT. Left is the whole point —
+-- the waste is the slot to the RIGHT, so a card that separated toward it
+-- would cover the card just drawn with the card about to be, which is the
+-- one thing this move must not do.
+--
+-- Capped by the same two limits the ribbon has: `fanRoom` above (never over
+-- the chrome, never off the top) and the window's own edge to the left, so a
+-- narrow screen slides it less rather than off the side.
+local function peekOffset(self: Table): (number, number)
+    local g = self.L
+    local sx = pileOrigin(g, self.game.stock)
+    local dx = math.min(T.stockPeekX * g.fit, math.max(0, sx - g.cw * 0.5))
+    local dy = math.min(T.stockPeekY * g.fit, fanRoom(self))
+    return dx, dy
+end
+
+-- WHERE THE RIBBON'S HEAD MAY GO: the box the top card's CENTRE is held
+-- inside while the pointer carries it. The deck is the table's top left
+-- corner, so the room is up (fanRoom, under the chrome) and out to the left,
+-- as far as the window's edge will take a whole card — the head pulls around
+-- that corner instead of being pinned inside the deck's own column.
+--
+-- To the right it stops at the column's edge: the waste is the next slot
+-- over, and a head that reached into it would fan the deck every time the
+-- player went for the card they just drew.
+--
+-- The hover's hitbox is this same box (grown by the pointer margin, and by
+-- the deck's own card below it), so wherever the head can be led, following
+-- it keeps the fan up.
+local function fanBox(self: Table): (number, number, number, number)
+    local g = self.L
+    local sx, sy = pileOrigin(g, self.game.stock)
+    -- THE PEEK'S BOX IS THE PEEK'S OWN REACH. One card sliding a few px off a
+    -- corner has not earned the ribbon's: a hitbox that kept it would fan the
+    -- deck from empty water most of a card away, and — because this is the
+    -- click's region too — would make that water draw.
+    if not ribbonHover() then
+        -- X IS IN EDGE TERMS HERE AND Y IS IN CENTRE TERMS: overStock grows
+        -- this box by half a card in y and by nothing in x, so the deck's own
+        -- card has to be spelled out on the left or the 60px of it outside
+        -- the peek's slide stops being clickable — and this box is the DRAW's
+        -- region as much as the hover's.
+        local dx, dy = peekOffset(self)
+        return sx - g.cw * 0.5 - dx, sx + g.cw * 0.5, sy - dy, sy
+    end
+    local x0 = math.max(g.cw * 0.5, sx - g.cw - T.stockBias * g.fit)
+    return x0, sx + g.cw * 0.5, sy - fanRoom(self), sy
+end
+
+-- WHERE THE DECK ANSWERS THE POINTER: the head's box, grown by `m` and by the
+-- deck's own card below it. One region for both questions it is asked —
+-- whether the fan stays up, and whether a click draws — because they are the
+-- same question. The click used to be the deck's SLOT alone, which was true
+-- while the ribbon never left the column; now that the head is led out to the
+-- corner, clicking the card you are pointing at has to be the draw, or the
+-- fan is a thing you can pull at and not take.
+local function overStock(self: Table, px: number, py: number, m: number): boolean
+    local x0, x1, y0, y1 = fanBox(self)
+    return px >= x0 - m and px <= x1 + m
+        and py >= y0 - self.L.ch / 2 - m and py <= y1 + self.L.ch / 2 + m
+end
+
+-- WHERE THE FAN STAYS UP, which is a bigger place than where a click draws.
+-- The deck is in the corner and the ribbon is led up and to the left, so the
+-- only edges that mean anything are the two the table is on: the right, where
+-- the waste starts, and the bottom, where the tableau does. Off the left or
+-- the top there is nothing to hand the pointer to — the window ends — so the
+-- region runs all the way out to both, and a hand that overshoots the corner
+-- it is pulling toward does not drop the ribbon on the way.
+local function nearStock(self: Table, px: number, py: number, m: number): boolean
+    local _, x1, _, y1 = fanBox(self)
+    return px <= x1 + m and py <= y1 + self.L.ch / 2 + m
+end
+
 local function pointerDown(self: Table, event: PointerEvent)
     -- A GESTURE IS ALREADY RUNNING AND THIS IS NOT IT. On a phone that is a
     -- second thumb, and without this it takes the card out of the first one's
@@ -2061,17 +2404,26 @@ local function pointerDown(self: Table, event: PointerEvent)
         return
     end
 
-    -- Stock: a click draws.
+    -- Stock: the press WINDS UP and the release draws.
+    --
+    -- The draw used to be the press, which is the right shape for a button
+    -- and the wrong one for a card you are pulling off a deck: the whole
+    -- gesture was over before the hand had finished making it. Held, the
+    -- ribbon is drawn back into the deck and the card comes off harder for
+    -- it — more turns, more arc, more goo. A tap is a hold of zero and lands
+    -- exactly where it always did, so nothing has to be learned to keep
+    -- playing the way you were.
     local sx, sy = pileOrigin(self.L, self.game.stock)
-    if math.abs(px - sx) <= self.L.cw / 2 and math.abs(py - sy) <= self.L.ch / 2 then
-        -- The fan drops into the draw: the top card flips off the ribbon.
-        self.stockPulse = 1
-        -- The click ends the rise. The fan's own fall would choke it a frame
-        -- later anyway (wantFan is scaled by 1 - stockPulse), but that is a
-        -- side effect of a decay rate; this says it outright and survives
-        -- stockDrop being retuned.
-        chokeHover(self)
-        drawStock(self)
+    local onSlot = math.abs(px - sx) <= self.L.cw / 2 and math.abs(py - sy) <= self.L.ch / 2
+    -- The slot always: with the stock empty there is no ribbon and the click
+    -- is the recycle. The ribbon's whole region on top of that, while it is up.
+    if onSlot or (self.stockFan > 0.02 and overStock(self, px, py, 0)) then
+        self.stockHold = 0
+        self.stockHoldPad = false
+        local top = K.top(self.game.stock)
+        if top ~= nil then
+            HOVER.kick(self.views[top.id].pop, T.pressKick)
+        end
         return
     end
 
@@ -2167,17 +2519,6 @@ local function updateDrag(self: Table, dt: number)
     end
 end
 
--- How far the stock's fan may rise: the tuner's stockRise, capped so the top
--- card never covers a piece of chrome that stands over the deck's column and
--- never leaves the window. The arithmetic is LAYOUT.fanRoom's, pure and
--- tested there — it is geometry at a viewport like everything else in that
--- file, and it was silently returning zero at every screen size for as long
--- as the readouts have been at the foot.
-local function fanRoom(self: Table): number
-    local sx = pileOrigin(self.L, self.game.stock)
-    return LAYOUT.fanRoom(self.L, sx, T.stockRise, T.stockClear)
-end
-
 local function pointerMove(self: Table, event: PointerEvent)
     if self.gestureId >= 0 and event.id ~= self.gestureId then
         return
@@ -2240,15 +2581,19 @@ local function pointerMove(self: Table, event: PointerEvent)
         drag.lastX, drag.lastY = px, py
         return
     end
-    -- Over the deck? The fan, and no card hover. The deck's hitbox is its
-    -- slot plus the room the fan may rise into, so the pointer can follow
-    -- the ribbon up; leave it and the fan collapses.
+    -- Over the deck? The fan, and no card hover. The hitbox is the head's own
+    -- box (nearStock), so the pointer can follow the ribbon wherever it is
+    -- allowed to lead it; leave that and the fan collapses.
+    --
+    -- A wind-up that leaves with it is DROPPED, not fired: sliding off the
+    -- deck is how every button on every screen is taken back, and a charge
+    -- that went off in the tableau because the hand drifted would be the one
+    -- thing about this that could not be undone.
+    if self.stockHold >= 0 and not self.stockHoldPad and not nearStock(self, px, py, 6 * self.L.fit) then
+        self.stockHold = -1
+    end
     do
-        local sx, sy = pileOrigin(self.L, self.game.stock)
-        local m = 6 * self.L.fit
-        local room = fanRoom(self)
-        self.stockHovered = math.abs(px - sx) <= self.L.cw / 2 + m
-            and py >= sy - self.L.ch / 2 - room - m and py <= sy + self.L.ch / 2 + m
+        self.stockHovered = nearStock(self, px, py, 6 * self.L.fit)
             and #self.game.stock.cards > 0
     end
     -- HYSTERESIS. A pointer resting on the seam between two fanned cards
@@ -2258,7 +2603,14 @@ local function pointerMove(self: Table, event: PointerEvent)
     -- it until the pointer is clearly out (grown by the margin) — unless a
     -- card ABOVE it in the stack has been clearly entered. The settle time
     -- in advance() is the second guard.
-    local pile, index = hitCard(self, px, py, -T.hoverMargin * self.L.fit * 0.5)
+    -- ACQUIRED AT THE EDGE, released late. The grab used to be shrunk by
+    -- half the margin too, so a card only took the hover once the pointer
+    -- was ~6px INSIDE it — which is felt as the card answering late rather
+    -- than as a deliberate deadzone. The stickiness that stops seam flicker
+    -- is the KEEP below (grown by the full margin) plus the z test, and
+    -- those still do their job with the grab at zero. `hoverGrab` puts the
+    -- old behaviour back if a seam ever chatters.
+    local pile, index = hitCard(self, px, py, -T.hoverGrab * self.L.fit)
     local raw = 0
     if pile ~= nil and pile.kind ~= 'stock' and K.runFrom(pile, index) ~= nil then
         raw = pile.cards[index].id
@@ -2287,6 +2639,11 @@ local function pointerUp(self: Table, event: PointerEvent)
     end
     if self.tunerDrag > 0 then
         self.tunerDrag = 0
+        event:hit()
+        return
+    end
+    if self.stockHold >= 0 and not self.stockHoldPad then
+        releaseStock(self)
         event:hit()
         return
     end
@@ -2473,12 +2830,15 @@ function Pad.south(self: Table)
         return
     end
     if pile.kind == 'stock' then
-        -- The same three lines the deck's click runs: the fan drops as the
-        -- top card flips off it, and the rising sound is choked rather than
-        -- left to be cut off by the fan's own fall a frame later.
-        self.stockPulse = 1
-        chokeHover(self)
-        drawStock(self)
+        -- The pointer's wind-up, on the button. The pad's dispatch is edges
+        -- only (PAD.read reports a press, never a release), so what ends this
+        -- one is advance watching `pad.state.south` go back up.
+        self.stockHold = 0
+        self.stockHoldPad = true
+        local top = K.top(self.game.stock)
+        if top ~= nil then
+            HOVER.kick(self.views[top.id].pop, T.pressKick)
+        end
         return
     end
     local k = self.pad.grab
@@ -2679,36 +3039,54 @@ end
 -- Keys. Codes are GLFW's (the input_demo sample: '1' is 49, backspace 259),
 -- so T is 84 and N is 78. Only reaches the script because the ScriptedLayout
 -- has a FocusData child and the viewer focuses it.
-local KEY_T = 84
-local KEY_N = 78
-local KEY_W = 87
-local KEY_M = 77
-local KEY_R = 82
-local KEY_J = 74   -- audition: previous card sound
-local KEY_K = 75   -- audition: replay
-local KEY_L = 76   -- audition: next
+-- ONE TABLE, not nine locals. Luau allows 200 locals per function and the
+-- module body IS a function: at nine separate constants this file was three
+-- short of the limit, and the tenth (C, for the cascade) made the whole
+-- script fail to LOAD — "out of local registers", reported against whatever
+-- declaration happened to be next, with the table rendering as a blank
+-- artboard and no other complaint. Group before you add.
+local KEY = {
+    T = 84,        -- the tuner
+    N = 78,        -- a fresh deal
+    W = 87,        -- cycle the water
+    M = 77,        -- mute
+    R = 82,        -- cycle the card rim
+    C = 67,        -- run the win cascade, won or not
+    J = 74,        -- audition: previous card sound
+    K = 75,        -- audition: replay
+    L = 76,        -- audition: next
+}
 local function keyboardEvent(self: Table, event: KeyboardEvent): boolean
     if event.phase ~= 'down' then
         return false
     end
-    if event.key == KEY_T then
+    if event.key == KEY.T then
         self.tunerOpen = not self.tunerOpen
         writeTuner(self)
         return true
-    elseif event.key == KEY_N then
+    elseif event.key == KEY.N then
         deal(self, freshSeed())
         return true
-    elseif event.key == KEY_W then
+    elseif event.key == KEY.W then
         T.waterMode = waterMode() % #WATER_MODES
         print(`sealitaire: water mode {T.waterMode} ({WATER_MODES[waterMode()]})`)
         writeTuner(self)
         return true
-    elseif event.key == KEY_R then
+    elseif event.key == KEY.C then
+        -- THE CASCADE ON DEMAND. A win is a rare thing to sit through and
+        -- the look has to be tuned against the real table, so C runs it
+        -- from wherever the game is: the four foundations empty as they
+        -- stand, and a pile with nothing in it simply has nothing to throw.
+        -- Pressing it again restarts, which is the tuning loop — drag a
+        -- slider, press C, watch.
+        startCascade(self)
+        return true
+    elseif event.key == KEY.R then
         T.cardRimMode = cardRimMode() % #RIM_MODES
         print(`sealitaire: card rim {T.cardRimMode} ({RIM_MODES[cardRimMode()]})`)
         writeTuner(self)
         return true
-    elseif event.key == KEY_J or event.key == KEY_K or event.key == KEY_L then
+    elseif event.key == KEY.J or event.key == KEY.K or event.key == KEY.L then
         -- AUDITION THE BANK from inside the game, where a hit sits under the
         -- water and the CRT: J back, L forward, K again. The id goes to the
         -- console so a keeper can be pasted into sfxEvents.csv, which is read
@@ -2727,7 +3105,7 @@ local function keyboardEvent(self: Table, event: KeyboardEvent): boolean
             print('sealitaire: sfx bank empty; run npm run sealitaire:sfx -- --write')
             return true
         end
-        local step = if event.key == KEY_J then -1 elseif event.key == KEY_L then 1 else 0
+        local step = if event.key == KEY.J then -1 elseif event.key == KEY.L then 1 else 0
         self.sfxIndex = ((self.sfxIndex - 1 + step) % count + count) % count + 1
         local name = bank[self.sfxIndex]
         local playing = self.sfxSound
@@ -2750,7 +3128,7 @@ local function keyboardEvent(self: Table, event: KeyboardEvent): boolean
             print(`sealitaire: sfx {name} is in sfx.csv but not in the file`)
         end
         return true
-    elseif event.key == KEY_M then
+    elseif event.key == KEY.M then
         -- Mute the SOUND, not the water: the ripples are the track's shape
         -- and being able to watch them with the room quiet is most of how
         -- they get tuned. Unmuting restores the volume that was set rather
@@ -3759,31 +4137,44 @@ local function loadTankTable(self: Table, context: Context)
                     print(`sealitaire: tanks.csv: {card}: model "{model}" is not in fish.mesh; run npm run sealitaire:fish`)
                 else
                     local id = (suit - 1) * 13 + rank
-                    self.tankOf[id] = {
+                    -- SPLIT IN TWO, THE WAY copyTank IS, and for the reason
+                    -- written over it: the whole row as one literal is the
+                    -- most expensive expression in this file to typecheck —
+                    -- twenty-five fields of `tonumber` unions and
+                    -- if-expressions, inferred from nothing and then subsumed
+                    -- into TankRec — and it is what the budget runs out on
+                    -- when anything anywhere else in the module grows. The
+                    -- REQUIRED fields make the record; the optionals are
+                    -- statements, each checked on its own against the field
+                    -- it is assigned to.
+                    local rec: TankRec = {
                         species = sp,
                         rank = rank,
                         count = math.max(1, math.min(16, tonumber(cell('count')) or 1)),
                         size = tonumber(cell('size')) or 1,
+                        suit = suit,
                         back = hexRgb(cell('back')),
                         belly = hexRgb(cell('belly')),
-                        -- The tank's background. Blank falls back to the suit
-                        -- family's, not to hexRgb's grey: a row with no colour
-                        -- should still read as the red suit or the black one.
-                        bg = if cell('bg') ~= '' then hexRgb(cell('bg')) else (if K.isRed(suit) then SUIT_BG_RED else SUIT_BG_BLACK),
+                        -- The tank's background, and only if this card wants
+                        -- its OWN. Blank stays nil and is resolved against the
+                        -- suit every frame — not baked to a colour here, or a
+                        -- tuner drag would not be seen until the next reload.
+                        bg = if cell('bg') ~= '' then hexRgb(cell('bg')) else nil,
                         knock = cell('knock'),
-                        colGap = tonumber(cell('colGap')), rowGap = tonumber(cell('rowGap')),
-                        padX = tonumber(cell('padX')), padY = tonumber(cell('padY')),
-                        drop = tonumber(cell('drop')), rotate = tonumber(cell('rotate')), rotateVary = tonumber(cell('rotateVary')),
-                        yaw = tonumber(cell('yaw')), roll = tonumber(cell('roll')), sway = tonumber(cell('sway')),
-                        loop = tonumber(cell('loop')),
                         bio = tonumber(cell('bio')) or 0,
                         -- The game's bioluminescence colour when the cell is blank.
                         bioColor = if cell('bioColor') ~= '' then hexRgb(cell('bioColor')) else { 0.4, 1.0, 0.878 },
-                        bioSpeed = tonumber(cell('bioSpeed')), bioScale = tonumber(cell('bioScale')), bioContrast = tonumber(cell('bioContrast')),
-                        bioCoverage = tonumber(cell('bioCoverage')), bioPan = tonumber(cell('bioPan')), bioEvolve = tonumber(cell('bioEvolve')),
                     }
+                    rec.colGap, rec.rowGap = tonumber(cell('colGap')), tonumber(cell('rowGap'))
+                    rec.padX, rec.padY = tonumber(cell('padX')), tonumber(cell('padY'))
+                    rec.drop, rec.rotate, rec.rotateVary = tonumber(cell('drop')), tonumber(cell('rotate')), tonumber(cell('rotateVary'))
+                    rec.yaw, rec.roll, rec.sway = tonumber(cell('yaw')), tonumber(cell('roll')), tonumber(cell('sway'))
+                    rec.loop = tonumber(cell('loop'))
+                    rec.bioSpeed, rec.bioScale, rec.bioContrast = tonumber(cell('bioSpeed')), tonumber(cell('bioScale')), tonumber(cell('bioContrast'))
+                    rec.bioCoverage, rec.bioPan, rec.bioEvolve = tonumber(cell('bioCoverage')), tonumber(cell('bioPan')), tonumber(cell('bioEvolve'))
+                    self.tankOf[id] = rec
                     -- The row as the file had it, for RESET.
-                    self.tankOrig[id] = copyTank(self.tankOf[id])
+                    self.tankOrig[id] = copyTank(rec)
                 end
             end
         end
@@ -3808,18 +4199,27 @@ local function loadTankTable(self: Table, context: Context)
         self.lab = labProp.value
     end
     if self.lab ~= '' then
-        print(`sealitaire: lab "{self.lab}" on every card, seed {LAB_SEED}`)
         -- The deal so far ran on a fresh seed; a sheet frame wants the
-        -- same seven faces for every species.
+        -- same seven faces every time.
         if self.dealSeed ~= LAB_SEED then
             deal(self, LAB_SEED)
         end
-        local sp = self.species[self.lab]
-        if sp == nil then
-            print(`sealitaire: lab: "{self.lab}" is not in fish.mesh (run npm run sealitaire:pool)`)
+        if self.lab == 'deal' then
+            -- `lab=deal` is the fixed deal and NOTHING else — every card
+            -- keeps its own species. That is what an audition of the TABLE
+            -- wants (tools/sealitaire-bg.mjs): two renders of the same seven
+            -- faces, differing only in the thing being auditioned. Without it
+            -- the only way to hold the deal still also put one fish on all 52.
+            print(`sealitaire: lab deal, seed {LAB_SEED}`)
         else
-            for _, rec in pairs(self.tankOf) do
-                rec.species = sp
+            print(`sealitaire: lab "{self.lab}" on every card, seed {LAB_SEED}`)
+            local sp = self.species[self.lab]
+            if sp == nil then
+                print(`sealitaire: lab: "{self.lab}" is not in fish.mesh (run npm run sealitaire:pool)`)
+            else
+                for _, rec in pairs(self.tankOf) do
+                    rec.species = sp
+                end
             end
         end
     end
@@ -4021,10 +4421,16 @@ end
 -- what pops, the hovered card first and each card below it `popWave` later
 -- (hover.luau). Whatever was popped and is no longer in the run is let
 -- down the same way. A held run is never popped: the hand has it.
+-- WHAT THE POINTER IS TOUCHING drives the lift, the glow and the blip.
+-- `self.hovered` is the SETTLED value and it is the SEAL's: a landing point
+-- that flips every time the pointer crosses a seam is what hoverSettle
+-- exists to stop. Nothing the hand sees should wait on it — at 90ms the
+-- card answers late.
 local function hoverPop(self: Table, now: number)
     local run: { number } = {}
-    if self.hovered ~= 0 and self.drag == nil then
-        local card = self.cardOf[self.hovered]
+    local touching = if self.drag == nil then self.hoverRaw else 0
+    if touching ~= 0 then
+        local card = self.cardOf[touching]
         if card ~= nil then
             for _, p in ipairs(K.piles(self.game)) do
                 for i, c in ipairs(p.cards) do
@@ -4528,7 +4934,7 @@ local function init(self: Table, context: Context): boolean
                 self.tunerRowVm[i] = rvm
                 self.tunerRows[i] = self.tunerRow:instance(rvm)
             end
-            for c = 1, #self.tunerCats + 2 do
+            for c = 1, #self.tunerCats + 3 do
                 local hvm = Data.TunerHead.new()
                 self.tunerHeadVm[c] = hvm
                 self.tunerHeads[c] = self.tunerHead:instance(hvm)
@@ -4569,7 +4975,7 @@ local function init(self: Table, context: Context): boolean
                 lift = 0, pop = HOVER.new(), tiltX = 0, tiltY = 0,
                 flip = 0, tflip = 0, z = 0,
                 phase = id * 1.37,
-                fanLift = 0,
+                fanLift = 0, fanK = 0, fanD = 0,
                 dealt = false,
                 inst = inst,
                 ink = nil,
@@ -4648,71 +5054,19 @@ end
 -- headless modes and everything below is a no-op there — the table is the
 -- same table without it.
 -- ---------------------------------------------------------------------------
--- Find the track and the analysis. It does NOT start anything: starting is
--- music.luau's, because the table is built more than once per context and a
--- second table starting a second copy is the whole of the bug that was.
+-- Load the analysis and the regions' assets. It does NOT start anything:
+-- starting is music.luau's, because the table is built more than once per
+-- context and a second table starting a second copy is the whole of the bug
+-- that was.
 local function startMusic(self: Table, context: Context)
-    if not MUSIC.load(self.music, context) then
-        return
-    end
-    local src = context:audio('music')
-    if src == nil then
-        print('sealitaire: music.mp3 missing; the water will not hear anything')
-        return
-    end
-    self.musicSource = src
+    MUSIC.load(self.music, context)
 end
 
--- The playhead the analysis is read at.
---
--- `sound:time()` is the truth whenever it MOVES: it is the speakers' own
--- clock, and a dropped frame must not slide the bands out of step with what
--- is actually being heard. But it does not always move. Every headless mode
--- that builds a player at all runs miniaudio with `noDevice`, which never
--- pulls a frame, so the playhead sits at 0 for the whole run — and a
--- `--screenshot` of the music's ripples would photograph frame zero of the
--- track forever and look entirely plausible. The modes that build no player
--- have no sound at all.
---
--- So: follow the sound while it is moving, and free-run on the table's clock
--- when it has not moved for a quarter second. Watch mode never takes the
--- fallback — a real device ticks the playhead every frame — and every
--- headless check takes it, which is what makes the ripples checkable.
-local CLOCK_STALL = 0.25
-
-local function musicClock(self: Table, dt: number): number
-    local sound = self.sound
-    if sound ~= nil then
-        local now = sound:time()
-        if now ~= self.soundLast then
-            self.soundLast = now
-            self.soundStill = 0
-            self.musicTime = now
-            return now
-        end
-        self.soundStill += dt
-        if self.soundStill <= CLOCK_STALL then
-            return self.musicTime
-        end
-    end
-    self.musicTime += dt
-    -- Free-running inside the REGION, not across the file. Without this the
-    -- headless clock walks the whole 265 seconds and reads the bake for
-    -- regions the table is not playing — which is exactly the kind of wrong
-    -- that still produces a plausible screenshot.
-    local loop = MUSIC.currentLoop(self.music)
-    if loop ~= nil then
-        if self.musicTime < loop.startSec or self.musicTime >= loop.endSec then
-            self.musicTime = loop.startSec
-        end
-        return self.musicTime
-    end
-    local span = self.music.duration
-    if span > 0 and self.musicTime > span then
-        self.musicTime -= span
-    end
-    return self.musicTime
-end
+-- The playhead the analysis is read at used to be computed here, off
+-- `sound:time()`, with a quarter-second stall detector because every
+-- headless mode runs miniaudio with `noDevice` and never moves it. Both are
+-- gone: music.luau's driver keeps that clock itself, from the frame's own
+-- `dt`, so there is one playhead in every mode and nothing to detect.
 
 local function stepMusic(self: Table, dt: number)
     -- Started from the first advance, not from init: init runs twice (the
@@ -4729,25 +5083,20 @@ local function stepMusic(self: Table, dt: number)
     if not self.music.ready then
         return
     end
-    -- One shared sound, started and looped inside music.luau. Every table
-    -- asks every frame and they all get the same one back; the playhead
-    -- dropping to zero on a loop is what its refractory guard is written for.
-    local src = self.musicSource
-    if src ~= nil then
-        self.sound = MUSIC.keepPlaying(src, T.musicVolume, self.time)
-        MUSIC.setMix(T.musicVolume * T.musicWash, T.musicDebug)
-        -- Then keep it inside its region. The gates are asked about the deal
-        -- in front of us; the session's counters are music.luau's, because
-        -- this table is rebuilt on a re-deal and a session is not.
-        local g = self.game
-        MUSIC.follow(self.music, self.sound, MUSIC.progress(K.founded(g), g.score, g.moves), Audio.time())
-    end
-    -- If a reload orphaned the track (see music.luau's RELOAD_GAP) there is no
-    -- sound to read a playhead off, but there IS one playing. It started at
-    -- engine time zero, so the engine's clock modulo the length is where it
-    -- has got to — which keeps the water in step with what is audible instead
-    -- of free-running from zero against a track that is minutes in.
-    local t = if MUSIC.isOrphaned() then MUSIC.orphanPlayhead(self.music.duration) else musicClock(self, dt)
+    -- ONE CALL. music.luau owns the transport: which region is sounding, when
+    -- the next one takes over, and the clock all of that is measured against.
+    -- The gates are asked about the deal in front of us; the session's
+    -- counters are its own, because this table is rebuilt on a re-deal and a
+    -- session is not.
+    --
+    -- What comes back is the playhead to read the BAKE at — the region's
+    -- offset in the original bounce plus how far into it we are. It is built
+    -- from this frame's `dt`, not from the audio engine, so it is the same
+    -- number in the player and in a headless screenshot. The stalled-clock
+    -- fallback that used to live here is gone with the clock it guarded.
+    local g = self.game
+    MUSIC.setMix(T.musicVolume * T.musicWash, T.musicDebug)
+    local t = MUSIC.drive(self.music, dt, T.musicVolume, MUSIC.progress(K.founded(g), g.score, g.moves))
     local gain = T.musicRipple
     -- Stepped even at gain 0, so the bands stay smoothed and the bed does not
     -- jump when the slider comes back up mid-track.
@@ -4813,25 +5162,47 @@ local function advance(self: Table, dt: number): boolean
         self.vortexCentre.x + ((0.5 + (focus.x / g.w - 0.5) * 0.35) - self.vortexCentre.x) * k,
         self.vortexCentre.y + ((0.55 + (focus.y / g.h - 0.5) * 0.35) - self.vortexCentre.y) * k
     )
-    if self.win >= 0 then
+    local casc = self.cascade
+    if casc ~= nil then
         self.win += dt
-        -- Every card circles the eye, tighter as it goes, and the water
-        -- spins with them. The next deal springs them back out.
-        local cx, cy = self.vortexCentre.x * g.w, self.vortexCentre.y * g.h
-        local w = self.win
-        for id = 1, 52 do
-            local v = self.views[id]
-            local a = w * 1.1 + id * 0.121
-            local radius = (math.max(70, 460 - w * 26 - (id % 5) * 24)) * g.fit
-            v.tx = cx + math.cos(a) * radius
-            v.ty = cy + math.sin(a) * radius * 0.62
-            v.trot = a + math.pi / 2
-            v.tscale = 0.8 + 0.2 * math.sin(a)
-            v.tflip = 1
-            v.z = 6000 + math.floor(math.sin(a) * 100)
+        CASCADE.update(casc, dt, {
+            w = g.w, h = g.h, cw = g.cw, ch = g.ch, fit = g.fit,
+            gravity = T.winGravity, launch = T.winLaunch, lift = T.winLift,
+            bounce = T.winBounce, gap = T.winGap, spin = T.winSpin,
+            floor = T.winFloor, restSpeed = T.winRest,
+        })
+        -- The card IS the sim: its position is written, not chased. The
+        -- spring's target follows it and its velocity is held at zero, so the
+        -- one update loop below is a no-op for a cascading card.
+        for i, c in ipairs(casc.cards) do
+            if c.live or c.gone then
+                local v = self.views[c.id]
+                v.x, v.tx, v.vx = c.x, c.x, 0
+                v.y, v.ty, v.vy = c.y, c.y, 0
+                v.rot, v.trot, v.vrot = c.spin, c.spin, 0
+                v.scale, v.tscale, v.vscale = 1, 1, 0
+                v.tflip = 1
+                v.z = 6000 + i
+            end
+        end
+        -- Each bounce rings the water and is heard. The loudest of the frame
+        -- only: a gap of cards landing together is one splash, not four.
+        local best, bx, by = 0, 0, 0
+        for _, hit in ipairs(casc.hits) do
+            if hit.speed > best then best, bx, by = hit.speed, hit.x, hit.y end
+        end
+        if best > 0 then
+            if T.winRipple > 0 then
+                ripple(self, bx, by, T.winRipple * math.min(1, best / (900 * g.fit)))
+            end
+            playSfx(self, 'play', math.min(1, 0.35 + best / (1400 * g.fit)))
         end
         self.orderDirty = true
         self.energy = math.max(self.energy, 0.8)
+        if CASCADE.done(casc) then
+            self.cascade = nil
+            print(`sealitaire: cascade done in {string.format('%.1f', self.win)}s`)
+        end
     end
 
     -- Cards.
@@ -4856,6 +5227,14 @@ local function advance(self: Table, dt: number): boolean
         if di ~= nil then
             kp = math.max(220, 700 - (di - 1) * 140)
             dp = math.max(20, 42 - (di - 1) * 5)
+        elseif v.fanK > 0 then
+            -- THE RIBBON IS SLOWER THAN THE TABLE. Every other card on this
+            -- felt wants to be in its slot NOW, which is what the 736 spring
+            -- is for; a fan hung off a moving cursor under that spring is a
+            -- rigid arm, and the weave has to do all the work of looking
+            -- alive. Softened, the cursor's own movement drives the chain and
+            -- the weave is only the water it hangs in (stockLead, stockFollow).
+            kp, dp = v.fanK, v.fanD
         end
         v.x, v.vx = spring(v.x, v.vx, v.tx, dt, kp, dp)
         v.y, v.vy = spring(v.y, v.vy, v.ty, dt, kp, dp)
@@ -4904,20 +5283,28 @@ local function advance(self: Table, dt: number): boolean
     if flight.id ~= 0 then
         local v = self.views[flight.id]
         flight.t += dt
-        local u: number = clamp(flight.t / math.max(0.05, T.drawTime), 0, 1)
+        local u: number = clamp(flight.t / math.max(0.05, flight.time), 0, 1)
         local e: number = u * u * (3 - 2 * u)
         v.x = flight.x + (v.tx - flight.x) * e
         v.y = flight.y + (v.ty - flight.y) * e
         -- The spring is not carrying it, so it must not arrive holding speed it
         -- never had.
         v.vx, v.vy = 0, 0
-        v.flip = u
+        v.flip = u * flight.spin
         -- Toward the viewer through the middle of the turn: a card coming over
         -- the top of an arc, not sliding across the felt.
-        v.scale = v.tscale * (1 + T.drawArc * math.sin(u * math.pi))
+        v.scale = v.tscale * (1 + T.drawArc * (1 + flight.power * T.holdArc) * math.sin(u * math.pi))
         v.vscale = 0
         if u >= 1 then
             flight.id = 0
+            -- FACE UP IS FACE UP at any odd number of half turns — pi and
+            -- three pi draw the same card — but the ease below would read 3
+            -- as a card three half-turns from where it should be and spin it
+            -- back. Landing says one and means it.
+            v.flip = 1
+            -- Back into the waste's order, now that being on top of the deck
+            -- it came off is no longer the point.
+            relayout(self)
         end
     end
 
@@ -4954,6 +5341,17 @@ local function advance(self: Table, dt: number): boolean
     -- switch to another card or a leave must hold for `hoverSettle` before
     -- the seal is told. A flicker shorter than that never reaches it.
     if self.drag == nil then
+        -- THE BLIP IS THE POINTER'S, so it fires on the raw edge — the
+        -- settled one below is 90ms later and was heard as the table being
+        -- slow. `cardHover`'s own minGap is what stops a fast sweep across
+        -- a column becoming a rattle, and it is measured in the audio
+        -- engine's clock rather than this one.
+        if self.hoverRaw ~= self.sfxHoverLast then
+            self.sfxHoverLast = self.hoverRaw
+            if self.hoverRaw ~= 0 then
+                playCardHover(self, self.hoverRaw)
+            end
+        end
         if self.hoverRaw ~= self.hovered then
             if self.hoverPending ~= self.hoverRaw then
                 self.hoverPending = self.hoverRaw
@@ -4961,25 +5359,6 @@ local function advance(self: Table, dt: number): boolean
             end
             if self.hovered == 0 or t - self.hoverSince >= T.hoverSettle then
                 self.hovered = self.hoverRaw
-                -- ON THE SETTLED EDGE, not the raw one: hoverRaw flickers as
-                -- the pointer crosses the gap between two cards, and a blip
-                -- on every flicker is a rattle. This is the same edge the
-                -- seal is told about.
-                if self.hovered ~= 0 then
-                    -- Klondike has no card->pile lookup and does not need
-                    -- one for this: the piles are twelve short lists and
-                    -- this runs on a hover edge, not a frame.
-                    local depth = 1
-                    for _, p in ipairs(K.piles(self.game)) do
-                        for _, c in ipairs(p.cards) do
-                            if c.id == self.hovered then
-                                depth = #p.cards
-                                break
-                            end
-                        end
-                    end
-                    playCardHover(self, depth)
-                end
             end
         else
             self.hoverPending = self.hovered
@@ -4994,10 +5373,27 @@ local function advance(self: Table, dt: number): boolean
     -- rise is capped by fanRoom(): never over the chrome, never off the top.
     -- Written onto the cards' targets, so the springs carry it.
     self.stockPulse = math.max(0, self.stockPulse - dt * T.stockDrop)
+    -- THE WIND-UP. A held deck draws the ribbon back into itself: the charge
+    -- is seconds against `holdFull`, and `holdWind` is how much of the fan it
+    -- takes back at full. That is the whole tell — the card does not go
+    -- anywhere while it is being wound, the deck pulls it in — and it is what
+    -- the flight then springs out of.
+    --
+    -- The pad's south button has no release event (PAD.read reports edges,
+    -- and only presses), so a pad hold ends where the state says it ended.
+    if self.stockHoldPad and self.stockHold >= 0 and self.pad.state.south ~= true then
+        releaseStock(self)
+    end
+    if self.stockHold >= 0 then
+        self.stockHold += dt
+    end
+    local charge = if self.stockHold >= 0 then clamp(self.stockHold / math.max(0.05, T.holdFull), 0, 1) else 0
+    self.stockWind += (charge - self.stockWind) * (1 - math.exp(-9 * dt))
     -- Is the deck WANTED — the pointer on it and no card in hand. The fan's
     -- height scales that by the click pulse; the SOUND must not.
     local fanWanted = self.stockHovered and self.drag == nil
     local wantFan = (if fanWanted then 1 else 0) * (1 - self.stockPulse)
+        * (1 - self.stockWind * T.holdWind)
     -- The fan rising is a sound: once, on the edge, not while it is up. And
     -- the fan DROPPING takes it away again — the take can outlast the fan,
     -- which otherwise leaves the deck settled and still ringing.
@@ -5055,11 +5451,48 @@ local function advance(self: Table, dt: number): boolean
     -- card is flipping away over it, and that one has to stay quick.
     local rate = if fanWanted then T.stockEase else T.stockSettle
     self.stockFan += (wantFan - self.stockFan) * (1 - math.exp(-rate * dt))
-    do
+    -- THE PEEK — the deck's ordinary hover. The top card separates from the
+    -- pile, up and to the left, far enough to read as lifted off it and no
+    -- further; everything under it stays a pile.
+    --
+    -- That last part is the difference from the ribbon, not a smaller dose of
+    -- it: there is no chain, no weave and no head on the cursor, so the body
+    -- is put back on its slots rather than left wherever the ribbon had it.
+    -- Nothing else does that for us — `relayout` runs on events, not frames —
+    -- and without it, flipping `stockHover` with the fan up would leave
+    -- twenty-three cards hanging in the water until the next deal.
+    if not ribbonHover() then
         local stock = self.game.stock
         local n = #stock.cards
-        local sx, sy = pileOrigin(g, stock)
-        local room = fanRoom(self)
+        local dx, dy = peekOffset(self)
+        local f = self.stockFan
+        for ki = 1, n do
+            local v = self.views[stock.cards[ki].id]
+            local bx, by = slotFor(g, stock, ki)
+            if ki == n then
+                -- The head keeps the ribbon's softer spring, blended in by the
+                -- fan's own height, so the slide has a little give in it and a
+                -- deck at rest still snaps to its slot.
+                v.fanK = T.cardSpring + (T.stockLead - T.cardSpring) * f
+                v.fanD = T.cardDamp + (T.stockDamp - T.cardDamp) * f
+                v.tx, v.ty = bx - dx * f, by - dy * f
+                v.trot = T.stockPeekTilt * f
+                v.fanLift = f * 14
+            else
+                v.fanK, v.fanD = 0, 0
+                v.tx, v.ty = bx, by
+                v.trot = 0
+                v.fanLift = 0
+            end
+        end
+    end
+    -- THE RIBBON — `stockHover` 1, kept as a stub. Everything below here is
+    -- it, and none of it runs in peek mode.
+    if ribbonHover() then
+        local stock = self.game.stock
+        local n = #stock.cards
+        local sx = pileOrigin(g, stock)
+        local bx0, bx1, by0, by1 = fanBox(self)
         -- WHERE THE RIBBON'S HEAD IS. The cursor while the deck is hovered,
         -- held inside the hitbox — and then simply LEFT THERE when it is not.
         --
@@ -5077,10 +5510,13 @@ local function advance(self: Table, dt: number): boolean
         -- pointer is known still rises straight up its own column instead of
         -- toward wherever the pointer was last seen.
         if self.stockHovered and self.pointerKnown then
-            self.fanX = clamp(self.pointer.x, sx - g.cw / 2, sx + g.cw / 2)
-            self.fanY = clamp(self.pointer.y, sy - room, sy)
+            self.fanX = clamp(self.pointer.x, bx0, bx1)
+            self.fanY = clamp(self.pointer.y, by0, by1)
         elseif self.stockFan < 0.001 then
-            self.fanX, self.fanY = sx, sy - room
+            -- Parked up and to the LEFT, which is the side the ribbon lives
+            -- on: the waste is the slot to the right and a fan that rises
+            -- across it hides the card the player just drew.
+            self.fanX, self.fanY = clamp(sx - T.stockBias * g.fit, bx0, bx1), by0
         end
         local topX, topY = self.fanX, self.fanY
         -- OVER THE WASTE WHILE THE RIBBON IS UP. The stock sits at z 100+ and
@@ -5093,23 +5529,99 @@ local function advance(self: Table, dt: number): boolean
         -- foundations. Only while the fan is actually up: down, the two piles
         -- want their ordinary order back, and at fan 0 the ribbon is inside its
         -- own column where the z cannot be seen either way.
-        local fanZ: number = if self.stockFan > 0.02 then 300 else 100
-        for ki, card in ipairs(stock.cards) do
-            local v = self.views[card.id]
+        local fanned = self.stockFan > 0.02
+        local fanZ: number = if fanned then 300 else 100
+        -- THE RIBBON IS A CHAIN PINNED AT BOTH ENDS, and everything the
+        -- player reads in it is the gradient between them.
+        --
+        -- The BOTTOM card is the deck: it holds the slot it was dealt into,
+        -- its lean included, because a pile whose base drifts and turns reads
+        -- as a pile falling over rather than one being pulled from. The TOP
+        -- card is the pointer — not near it, on it, since it is the card the
+        -- click is going to take. Each card between is looser than the one
+        -- under it and tighter than the one over it.
+        --
+        -- `slack` is that gradient, and it is GEOMETRIC IN DEPTH, not a
+        -- fraction of the deck's height: card k is `stockChain` of the way
+        -- from the card above it back toward its slot, whether there are
+        -- twenty-four cards in the stock or four. Spread as a fraction of n
+        -- (the old (ki-1)/(n-1)) put the top five cards inside the last 8% of
+        -- the ribbon, one on top of another at the cursor — which is what
+        -- made a draw look like it came out of the middle of the deck. There
+        -- is no middle to come out of now: the head stands alone at the end
+        -- of the chain and the next card is a fifth of the ribbon behind it.
+        --
+        -- And each card reaches for WHERE THE CARD ABOVE IT ACTUALLY IS, not
+        -- for the head — so every link adds its own spring's lag and the
+        -- ribbon snakes through a turn instead of swinging as one board. It
+        -- is updateDrag's trail, made out of the card springs already running.
+        local chain = clamp(T.stockChain, 0.05, 0.98)
+        local ax, ay = topX, topY
+        for ki = n, 1, -1 do
+            local v = self.views[stock.cards[ki].id]
             local bx, by = slotFor(g, stock, ki)
+            -- THE HEAD IS OVER EVERYTHING. It is the card under the pointer
+            -- and the one the next click takes, so nothing on the table may
+            -- cross it — not the foundations it rises past, not the card
+            -- flying off to the waste, and not the rest of its own ribbon.
+            -- The body keeps the old 300+: over the waste, under the
+            -- foundations, which is the right order for a pile.
             local wantZ: number = fanZ + ki
+            if fanned and ki == n then
+                wantZ = 4000
+            end
             if v.z ~= wantZ then
                 v.z = wantZ
                 self.orderDirty = true
             end
-            local u = if n > 1 then (ki - 1) / (n - 1) else 1
             local f = self.stockFan
-            local lift = f * math.pow(u, 1.6)
-            local sway = T.stockSway * g.fit * f * (1 - u) * math.sin(u * 4.2 + t * T.stockWobble)
-            v.tx = bx + (topX - bx) * lift + sway
-            v.ty = by + (topY - by) * lift
-            v.trot = T.stockTilt * f * (1 - u * 0.5) * math.sin(u * 3.1 + t * T.stockWobble * 0.7)
-            v.fanLift = f * u * 14
+            -- 0 at the deck's slot, 1 on the cursor.
+            local slack = f * math.pow(chain, n - ki)
+            -- THE RIBBON'S OWN SPRING, softer than the table's and softest
+            -- down the chain: the head holds the cursor (stockLead) and the
+            -- body trails it (stockFollow). Blended in by the fan's own
+            -- height so a deck at rest is still a deck that snaps to its slot.
+            local want = if ki == n then T.stockLead else T.stockFollow
+            v.fanK = T.cardSpring + (want - T.cardSpring) * f
+            v.fanD = T.cardDamp + (T.stockDamp - T.cardDamp) * f
+            -- LOOSEST JUST UNDER THE HEAD and nothing at either end: the
+            -- weave may move the cards it is carrying, never the deck it
+            -- comes off or the card the pointer is holding. The head is out
+            -- by NAME rather than by its slack being 1, because its slack is
+            -- only 1 once the fan is all the way up — halfway through the
+            -- rise the curve would hand the card under the pointer the full
+            -- weave, and the one card on this table that is never allowed to
+            -- leave the pointer is that one.
+            local loose = if ki == n then 0 else 4 * slack * (1 - slack)
+            local d = n - ki
+            -- THE BOW IS LEFT AND THE SWAY HANGS OFF IT. Both are shaped by
+            -- `loose`, so both are nothing at the deck and nothing at the
+            -- cursor: the ribbon bellies out on the side away from the waste
+            -- and breathes there, rather than cutting the straight line
+            -- between the two ends across the card the player just drew.
+            local bow = -T.stockBias * g.fit * loose
+            local sway = T.stockSway * g.fit * loose * math.sin(d * 0.9 + t * T.stockWobble)
+            v.tx = bx + (ax - bx) * slack + bow + sway
+            v.ty = by + (ay - by) * slack
+            -- THE LEAN IS THE CHAIN'S OWN DIRECTION: a card points at the one
+            -- it is following, so a ribbon dragged sideways lies over like a
+            -- ribbon. It fades out as the link closes up, because two cards a
+            -- quarter of a pixel apart have an angle between them and it is
+            -- noise. The head has no card above it: it banks into its own
+            -- travel instead, which is the cursor leading it.
+            local lean = 0
+            if ki == n then
+                lean = clamp(v.vx * 0.0005, -0.45, 0.45) * f
+            else
+                local dx, dy = ax - v.tx, ay - v.ty
+                local reach = clamp(math.sqrt(dx * dx + dy * dy) / (g.cw * 0.35), 0, 1)
+                lean = math.atan2(dx, -dy) * 0.55 * reach * slack
+            end
+            v.trot = lean + T.stockTilt * loose * math.sin(d * 0.7 + t * T.stockWobble * 0.7)
+            v.fanLift = slack * 14
+            -- The next card down follows this one where it REALLY IS, which
+            -- is a spring behind where it was asked to be.
+            ax, ay = v.x, v.y
         end
     end
 
@@ -5639,9 +6151,13 @@ local function drawFish(self: Table)
             -- the rank's glow is lit in. A card with no tanks.csv row still
             -- gets both, from its suit.
             local card = self.cardOf[id]
-            local suitRed = if card ~= nil and K.isRed(card.suit) then 1 else 0
+            local suit = if card ~= nil then card.suit else (id - 1) // 13 + 1
+            local suitRed = if K.isRed(suit) then 1 else 0
             local rec0 = self.tankOf[id]
-            local bg = if rec0 ~= nil then rec0.bg else (if suitRed == 1 then SUIT_BG_RED else SUIT_BG_BLACK)
+            -- Resolved HERE rather than at load, so a `bg<Suit>` drag lands on
+            -- every card of that suit this frame.
+            local own = if rec0 ~= nil then rec0.bg else nil
+            local bg = if own ~= nil then own else suitBg(suit)
             buffer.writef32(cb, e + 48, bg[1] * T.tankBg)
             buffer.writef32(cb, e + 52, bg[2] * T.tankBg)
             buffer.writef32(cb, e + 56, bg[3] * T.tankBg)
@@ -6103,7 +6619,9 @@ local function drawCards(self: Table, r: Renderer)
         r:restore()
 
         -- Glow ring on the hovered card.
-        if self.hovered == id then
+        -- The ring answers the pointer, like the lift, not the settled
+        -- value the seal waits on.
+        if self.hoverRaw == id and self.drag == nil then
             r:save()
             r:transform(Mat2D.withTranslation(v.x, v.y + popRise(g, v)))
             r:transform(Mat2D.withRotation(v.rot))
@@ -6315,6 +6833,7 @@ return function(context: Context): Layout<Table>
         tunerDrag = 0, tunerDragKind = 'row',
         subject = 0, subjectOpen = false, subjectRows = {}, subjectRowVm = {},
         subjectHead = nil, subjectHeadVm = nil, suitHead = nil, suitHeadVm = nil,
+        sfxLastLine = '(no sound yet)', sfxHoverLast = 0,
         pool = {}, tankOrig = {}, tankDirty = {}, lab = '',
         tunerScroll = 0, tunerReach = 0, tunerPan = -1, tunerPanFrom = 0,
         panelPath = Path.new(),
@@ -6326,6 +6845,7 @@ return function(context: Context): Layout<Table>
         -- The gutter's thumb: the unit circle scaled into a lozenge.
         thumbPaint = Paint.with({ color = Color.rgba(185, 212, 238, 150), style = 'fill' }),
         stockHovered = false, stockFan = 0, stockPulse = 0,
+        stockHold = -1, stockHoldPad = false, stockWind = 0,
 
         puppet = PUPPET.new(W0 * 0.1875, H0 * 0.76),
         bitten = 0, biteSide = 1, releaseT = -1,
@@ -6348,7 +6868,7 @@ return function(context: Context): Layout<Table>
 
         pointer = Vector.xy(W0 / 2, H0 / 2),
         pointerKnown = false,
-        hovered = 0, popped = {}, reactSeq = 0, reactVariant = '', reactLast = '',
+        hovered = 0, popped = {}, reactSeq = 0, reactVariant = '', reactLast = '', cascade = nil,
         hoverRaw = 0, hoverPending = 0, hoverSince = 0,
         drag = nil,
         lastDownId = 0,

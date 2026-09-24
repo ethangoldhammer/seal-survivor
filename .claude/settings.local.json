@@ -52,7 +52,17 @@
       "Bash(python3 -m http.server 5192 --bind 127.0.0.1)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5192/atlas.html)",
       "Bash(kill %1)",
-      "Bash(pkill -f \"http.server 5192\")"
+      "Bash(pkill -f \"http.server 5192\")",
+      "Bash(grep -n '${excluded}' tools/playtest-atlas.mjs)",
+      "Bash(node tools/playtest-ledger-test.mjs)",
+      "Bash(node tools/playtest-collect-test.mjs)",
+      "Bash(awk '{ if \\(length\\($0\\)>300\\) printf \"%d: [DATA %d chars]\\\\n\", NR, length\\($0\\); else print NR\": \"$0 }' /Users/ethangoldhammer/.claude/projects/-Users-ethangoldhammer-Projects-seal-survivor/8544f425-7db1-4f61-9596-99279129a2b6/tool-results/artifact-6d5021ec-1789402958-0941.html)",
+      "Bash(awk '{ if \\(length\\($0\\)>300\\) printf \"%d: [DATA %d chars]\\\\n\", NR, length\\($0\\); else print NR\": \"$0 }' playtest/atlas.html)",
+      "Bash(awk '{ if \\(length\\($0\\)>300\\) printf \"[DATA %d chars]\\\\n\", length\\($0\\); else print }' /Users/ethangoldhammer/.claude/projects/-Users-ethangoldhammer-Projects-seal-survivor/8544f425-7db1-4f61-9596-99279129a2b6/tool-results/artifact-6d5021ec-1789402958-0941.html)",
+      "Bash(awk '{ if \\(length\\($0\\)>300\\) printf \"[DATA %d chars]\\\\n\", length\\($0\\); else print }' playtest/atlas.html)",
+      "Bash(python3 -m http.server 8791 --bind 127.0.0.1)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8791/)",
+      "Bash(pkill -f \"http.server 8791\")"
     ]
   }
 }

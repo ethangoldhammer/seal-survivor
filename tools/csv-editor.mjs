@@ -1294,6 +1294,19 @@ function readBody(req) {
 // Only when run directly: csv-editor-test.mjs imports the parser and the
 // schema extractors, and a test run must not leave a listening socket behind.
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // A PORT ALREADY IN USE IS THE ORDINARY CASE here, not a crash — two Claude
+  // sessions on this repo is exactly the situation the mtime check above
+  // exists for, so the editor being already up is normal. Unhandled, it ends
+  // in an 'error' event and a Node stack trace, which reads as the tool being
+  // broken rather than as the tool already being at the address you wanted.
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is taken — an editor is already running.`);
+      console.error(`  open http://localhost:${PORT}, or set CSV_EDITOR_PORT to use another port.`);
+      process.exit(1);
+    }
+    throw err;
+  });
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`CSV editor  →  http://localhost:${PORT}`);
     console.log(`  tables: ${TABLES.map((t) => t.file).join(', ')}`);

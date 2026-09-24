@@ -33,6 +33,7 @@ import { join } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { commands, pages, GROUP_ORDER, ROOT, blurbFromFile, targetFile } from './hub-catalogue.mjs';
+import { GAMES } from './games.mjs';
 import { MAX_MESSAGE, PROD_BRANCH, SHIP_SCRIPT, checkMessage, shipArgs } from './hub-ship.mjs';
 
 let failures = 0;
@@ -264,6 +265,56 @@ const rootPages = PAGES.filter((p) => p.on === 'dev').map((p) => p.file).filter(
 const missingRoot = rootPages.filter((f) => !existsSync(join(ROOT, f)));
 check('every tracked root page card matches a file in the repo root',
   !missingRoot.length, missingRoot.join(', '));
+
+console.log('\nTHE GAMES — every door in tools/games.mjs opens onto something that exists');
+
+// The Games card is generated from that table the way the command list is
+// generated from package.json, which means a row naming a script nobody ever
+// wrote renders a perfectly convincing button that fails in the drawer. There
+// are only two rows and it is tempting to trust them; that is exactly how
+// the fourth one ships broken.
+for (const g of GAMES) {
+  check(`${g.key}: \`npm run ${g.script}\` is a script`, !!pkg.scripts[g.script]);
+  check(`${g.key}: \`npm run ${g.app}\` is a script`, !!pkg.scripts[g.app]);
+  // Every app script goes through the one generator, with the row's own key on
+  // the line. A row whose bundle is generated for another game is a Dock icon
+  // that opens the wrong thing and says the right name.
+  check(`${g.key}: its Dock button is generated for ITSELF`,
+    (pkg.scripts[g.app] ?? '').includes(`game-app.mjs ${g.key}`),
+    pkg.scripts[g.app]);
+  // A viewer game's busy exit is read out of its tune tool at generation time.
+  // Without the constant there, game-app.mjs throws rather than writing a
+  // bundle that cannot tell "already open" from "crashed".
+  if (g.tune) {
+    check(`${g.key}: its tune tool still declares BUSY`,
+      /const BUSY = \d+/.test(readFileSync(join(ROOT, g.tune), 'utf8')), g.tune);
+  }
+  // The editor round trip is three buttons, and the row only carries the
+  // prefix — so a game with `editor` set and only two of the three scripts
+  // renders a button that cannot run.
+  if (g.editor) {
+    for (const suffix of ['pull', 'pull:apply', 'push']) {
+      check(`${g.key}: \`${g.editor}:${suffix}\` is a script`, !!pkg.scripts[`${g.editor}:${suffix}`]);
+    }
+  }
+  // A route game has no window to count, so its door is an address — and the
+  // game has to actually read the param at the end of it. `?ball` was a flag
+  // this repo deliberately removed once; a table that names a route main.js
+  // does not take is a button that lands on the menu and looks like a no-op.
+  if (g.url) {
+    const param = new URL('http://x' + g.url).searchParams.keys().next().value;
+    check(`${g.key}: the game reads \`?${param}\``,
+      readFileSync(join(ROOT, 'path/src/main.js'), 'utf8').includes(`.has('${param}')`),
+      g.url);
+  }
+}
+
+// Which the page then has to actually draw. The card was hand-written for one
+// game before this; a drawGames that stopped reading the table would render
+// the same page it always did and pass every check above.
+const gamesHtml = readFileSync(join(ROOT, 'tools/hub.html'), 'utf8');
+check('the workbench draws its Games card from the table, not from a list in the page',
+  gamesHtml.includes('ST.games') && !/drawSealitaire/.test(gamesHtml));
 
 console.log('\nTHE PAGE ITSELF');
 

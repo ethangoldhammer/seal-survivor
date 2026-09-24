@@ -38,6 +38,7 @@ npm run sealitaire:app        # (re)make the Dock button in ~/Applications
 | `klondike.luau` | the rules, pure; `tests.luau` proves them |
 | `pad.luau` | the gamepad: where the cursor can be on the table and what a direction does to it, and the device half (button edges, stick deadzone). Pure, like the two above, and proved the same way |
 | `layout.luau` | where everything goes at any viewport, pure: card size, the grid, the fan, the chrome's anchors, the panel. `tests.luau` proves it |
+| `tools/sealitaire-bg.mjs` | `npm run sealitaire:bg` — the tank backgrounds auditioned four at a time, one render per candidate palette into `build/bg/`. See "The suits" |
 | `puppet.luau` | the seal's motion, ported from the game's level-up seal: state blender, the run's pull physics, the idle/swim/boost clip controller |
 | `react.luau` | what the seal does after a valid play: spin, barrel roll, flip, clap, and the file's own bark/roll/ball clips — pure choreography as a function of seconds (see "The reactions") |
 | `motion.luau` | the seal's states — idle, card, drag, bite, release, win — (landing point, heading, roll, look, jaw, and `behind`, which side of the cards it swims on), the shape of `levelUpSealMotion.json` |
@@ -234,6 +235,40 @@ joined the advance loop); and the foot's buttons are hit-tested at 100px
 each, not the column's width, because at the column's width SAVE was the
 first match for every press on the foot and RESET was unreachable.
 
+## The win: the cascade
+
+The foundations empty themselves down the screen the way Windows Solitaire
+taught everybody — a card at a time, thrown sideways, falling and BOUNCING
+off the bottom until it walks off the edge. `cascade.luau` is the physics and
+the schedule, pure; table.luau owns the clock and writes each card's position
+straight onto its view (a bounce chased by the card spring is a smear, so the
+spring's target follows the card rather than the other way round).
+
+**C runs it whenever you like.** A look that can only be seen by winning
+cannot be tuned, so with nothing on the foundations C builds what a win would
+have left — thirteen of each suit on their own pile — and throws that. It is
+not a stand-in: the same 52 cards in the same four stacks through the same
+code, and the log says `(a rehearsal: the game is not won)` so the two are
+never confused. Press it again to restart; a deal (N) ends one mid-air.
+
+Every number is a tuner row under `win`, and the ones that change what it IS
+rather than how fast: `winBounce` (of the downward speed kept on each hit —
+under about 0.5 the cards heap instead of cascading), `winGap` (seconds
+between cards, the whole rhythm), `winLaunch` (how wide the arcs open).
+`winRipple` rings the water where a card lands and the landing is heard.
+
+Three things it gets right that are easy to miss. It launches on the CLOCK,
+so a long frame owes two cards and launches two rather than quietly
+stretching the cascade. A card that settles is marked RESTING and stops
+answering gravity — without that it fell a frame's worth, tripped the floor,
+was clamped back and counted another bounce, sixty a second, and one test
+card reported 242. And every number comes from the card's own hash rather
+than `math.random`, so the same trigger gives the same cascade twice, which
+is the difference between tuning a look and chasing one.
+
+Headless: `--key=c` (CLI 1.1.0+) fires it through the real dispatch path —
+`rive rive/sealitaire --advance=30 --key=c --advance=130 --screenshot=...`.
+
 ## The reactions
 
 A valid play is answered. `tryMove` bumps `reactSeq` and picks a variant
@@ -339,11 +374,160 @@ face lifting off its own window.
 
 ## The deck's fan
 
-Hover the stock and it lifts into a ribbon: the top card pinned to the
-cursor, the rest weaving up to it, a click dropping the lot as the top card
-flips away. The **ceiling** is `LAYOUT.fanRoom` — the strip between the
-window's top edge and the deck's own, less `stockClear` of air, capped by the
-tuner's `stockRise`.
+**Two hovers, and `stockHover` picks one.** 0 is THE PEEK, which is what the
+deck ships with; 1 is THE RIBBON, kept as a stub so the two can be looked at
+side by side on the same build rather than across a revert. Everything from
+"A chain pinned at both ends" down to the wind-up belongs to the ribbon and
+none of it runs in peek mode.
+
+**The peek.** The top card separates from the pile — `stockPeekX` left,
+`stockPeekY` up, leaning `stockPeekTilt` as it goes — far enough to read as
+lifted off it and no further. Everything under it stays a pile: no chain, no
+weave, no head on the cursor. LEFT is the whole point of the direction. The
+waste is the slot to the RIGHT, so a card separating toward it would cover
+the card just drawn with the card about to be, which is the one thing the
+move must not do; up-and-left uncovers both.
+
+Two things the peek has to do for itself. It writes the BODY's targets back
+onto their slots every frame, because `relayout` runs on events and not on
+frames — without it, flipping `stockHover` while the fan is up leaves
+twenty-three cards hanging in the water until the next deal. And `fanBox`
+shrinks to the peek's own reach: that box is the DRAW's region as well as the
+hover's, so keeping the ribbon's would have fanned the deck, and drawn from
+it, out of empty water most of a card away. Mind the units in there — x is in
+edge terms and y in centre terms, because `overStock` grows the box by half a
+card in y and by nothing in x. Spelled as centres, the 60px of the deck
+outside the peek's slide stopped being clickable.
+
+**Shared by both.** The **ceiling** is `LAYOUT.fanRoom` — the strip between
+the window's top edge and the deck's own, less `stockClear` of air, capped by
+the tuner's `stockRise`; the peek's slide is capped by it too, and by the
+window's left edge, so a narrow screen slides it less rather than off the
+side. So are `stockFan` itself, the two rates below, the hitbox, and both
+sounds.
+
+Hover the stock in ribbon mode and it lifts into a ribbon: the top card
+pinned to the cursor, the rest weaving up to it, a click dropping the lot as
+the top card flips away.
+
+**A chain pinned at both ends.** The bottom card holds the slot it was dealt
+into, lean included; the top card is ON the cursor, not near it; and the
+gradient between them is everything the ribbon does. `stockChain` is that
+gradient and it is per CARD — each one sits that fraction of the way from the
+card above it back toward its own slot — so the shape is the same with four
+cards left as with twenty-four. Spread as a fraction of the DECK (the old
+`(ki-1)/(n-1)`) packed the top five cards into the last 8% of the ribbon, one
+on top of another under the pointer, and that is what made a draw look like it
+came out of the middle of the deck rather than off the top of it.
+
+Each card reaches for **where the card above it actually is**, not for the
+head, so every link adds its own spring's lag and the ribbon bends through a
+turn instead of swinging as one board — updateDrag's trail, built out of the
+card springs already running. Its lean is the chain's own direction (a card
+points at the one it is following, faded out as the link closes up, because
+two cards a quarter of a pixel apart have an angle between them and it is
+noise); the head has nothing above it, so it banks into its own travel
+instead. The weave (`stockSway`, `stockTilt`) is weighted to peak just under
+the head and to reach zero at both ends: it may move the cards the ribbon is
+carrying, never the deck it comes off or the card the pointer is holding.
+
+**The head's box is `fanBox`.** The deck is the table's top left corner, so
+the head is free to pull up under the chrome and out to the left as far as the
+window will take a whole card — it stops at the column's right edge only
+because the waste is the next slot over. `overStock` is that box, and a click
+inside it draws: the draw used to be the deck's SLOT alone, which was true
+while the ribbon never left the column and became a fan you could pull at but
+not take the moment it did.
+
+**Staying is a bigger place than drawing** (`nearStock`). The only edges that
+mean anything to a deck in the corner are the two the table is on — the right,
+where the waste starts, and the bottom, where the tableau does. Off the left
+or the top there is nothing to hand the pointer to, so the hover runs all the
+way out to both window edges: the head stops at its box and the ribbon simply
+stays up behind an overshooting hand, instead of being dropped by the corner
+it was being pulled toward.
+
+**The ribbon leans left** (`stockBias`). The waste is the slot immediately to
+the right of the deck, so a fan that rises straight up crosses the card that
+was just drawn. The bias is one number spent three ways: the head's box
+reaches that much further left, the ribbon's body bows that far out (shaped by
+`loose`, so the belly is in the middle and neither end moves), and a fan with
+no pointer to follow parks up and to the left rather than straight up.
+
+**The head is over everything** (z 4000), and the card in flight is over the
+head (4200). The body of the ribbon keeps 300+: above the waste, under the
+foundations, which is the right order for a pile. The flight needs saying
+because `relayout` puts the drawn card at the waste's 200+ the instant it
+leaves, which is UNDER the fan still collapsing behind it — the card the
+player clicked spent the first tenth of its flight inside the deck. Both
+numbers are written at the two places that use them rather than named at the
+top of the file, because the main chunk is at Luau's 200-local ceiling (see
+**The two ceilings** below).
+
+**The ribbon has its own springs.** Every other card on this felt wants to be
+in its slot NOW, which is what `cardSpring` (736) is for; a fan hung off a
+moving cursor under that spring is a rigid arm, and the weave has to do all
+the work of looking alive. So a fanned stock card asks for its own spring
+instead — `stockLead` for the head, `stockFollow` for the body, blended in by
+the fan's own height so a deck at rest still snaps — and the cursor's movement
+is then what drives the chain, with the weave left to be the water it hangs
+in. `v.fanK`/`v.fanD` carry the ask; `relayout` clears them, so a card that
+has left the stock cannot keep them.
+
+## The wind-up
+
+**Press, and the deck draws the card BACK; release, and it throws it.** The
+draw used to be the press, which is the right shape for a button and the wrong
+one for a card being pulled off a deck: the whole gesture was over before the
+hand had finished making it. `stockHold` is how long the deck has been held,
+`holdFull` is what a full wind-up costs in seconds, and everything the release
+does scales with the fraction of it the hand gave — turns (`holdFlip`), arc
+(`holdArc`), seconds in the air (`holdTime`), water (`holdGoo`), the ripple and
+the sound. **A tap measures zero and lands exactly where it always did**, so
+nothing has to be learned to keep playing the way you were.
+
+While it is wound, `holdWind` takes that fraction off the fan's height: the
+card does not go anywhere, the deck pulls it in, and the flight springs out of
+that. Sliding off the deck DROPS the wind-up rather than firing it — that is
+how every button on every screen is taken back, and a charge that went off in
+the tableau because the hand drifted would be the one thing here that could
+not be undone.
+
+The turns are odd half-turns, always: `flip` is the turn's progress, the face
+swaps every half of one, and an even count would land the card on its own
+back. `holdFlip` is counted in WHOLE turns for that reason. The landing writes
+`flip = 1` outright — pi and three pi draw the same card, but the ease that
+takes over afterwards would read 3 as a card three half-turns from home and
+spin it back.
+
+The goo is two halves: a burst thrown off the card as it leaves the ribbon
+(`PUDDLE.splash`, with a longer `free` than a landing's so the drops get clear
+of the deck before its own goo pulls them back in) and the landing's own slap
+on the waste, which `PUDDLE.advance` fires when the card settles. The pass
+holds 24 drops at once and the oldest give way, so `holdGoo` past about 8 x
+`gooSplash` is churn rather than more water.
+
+The pad plays the same gesture: `Pad.south` starts the wind-up, and because
+`PAD.read` reports edges and only presses, what ends it is `advance` watching
+`pad.state.south` go back up.
+
+## The two ceilings
+
+table.luau is at BOTH of Luau's per-module limits, and neither one tells you
+what it is when you cross it.
+
+**Type inference.** "Code is too complex to typecheck", pointing at the most
+expensive expression in the file — which is almost never the code that tipped
+it over. The remedy is the one written over `copyTank`: a big record is built
+as a literal of its REQUIRED fields and a run of assignments for the optional
+ones, each checked on its own against the field it lands in. `loadTankTable`'s
+twenty-five-field row is the other one that had to be split this way.
+
+**Registers.** "Out of local registers when trying to allocate X: exceeded
+limit 200" — the MAIN CHUNK's own locals, so every top-level `local function`
+and every named constant at file scope costs one. This one is worse than the
+type error: `--verify` still says `0 errors` and the table simply never runs.
+Grep the build output for `registers`, not just for `error`.
 
 Only chrome that is **actually above the deck** may lower that ceiling. The
 floor used to be the bottom edge of any chrome rectangle overlapping the
@@ -526,7 +710,12 @@ top-level `local function`, and unlike the other it fails at LOAD rather than
 at build — `--verify` says `0 errors` and the table simply never runs. It
 names whichever function was being allocated when the count ran out. A table of
 functions (`local Pad = {}`, then `function Pad.step(...)`) costs one register
-for any number of them.
+for any number of them. A `do` block is the other lever: a block's locals are
+released at its `end`, so a function with private data beside it — `suitBg`
+with its key list and its buffer — declares the name outside and everything
+else inside, and costs ONE register rather than three. It is worth reaching
+for both whenever a change adds more than a name or two at file scope: the
+file sits ON this ceiling, and three new ones is what broke it last.
 
 ## The card's edge
 
@@ -590,12 +779,37 @@ screen, and a full sweep over that width is four stripes.
 
 A card is **red or black**, and both say so twice.
 
-**The background.** Each card's tank has its own background colour, `bg` in
-tanks.csv — warm behind a red suit, cold behind a black one — so the family
-reads across the table before any rank is legible. It is per CARD rather than
-per suit because it lives in the row, so one card can be given its own water
-without touching the other twelve. The tuner's `tankBg` scales all of them at
-once for a quick lighter/darker pass.
+**The background is the SUIT's.** Four colours, one per suit, as twelve
+tuner rows under the `suits` header — `bgFishR/G/B`, `bgStarR/G/B`,
+`bgBubbleR/G/B`, `bgShellR/G/B`. They are resolved in `drawFish` EVERY FRAME
+rather than baked into the record at load, so dragging one repaints thirteen
+cards while you watch; baking it at parse time is the version where a drag
+does nothing until the next reload. `tankBg` still scales all four, and sits
+at 1 so a suit row IS the colour it shows — at 2 every channel above 0.5
+clamped to white and half of each slider did nothing.
+
+A tanks.csv `bg` cell OVERRIDES one card, for the one that wants its own
+water; it is blank on all 52, so the four rows are what the table shows.
+`TankRec.bg` is `{ number }?` and nil means "the suit's": `colourOf` seeds a
+card its own copy the first time a bg row is DRAGGED (the same bargain
+`drop` and `colGap` make), `subjectGet` reads without seeding — a panel that
+merely displayed a card must not hand it a cell it never asked for — and the
+panel prints an un-owned bg with the same `~` a layout row gets. SAVE writes
+the cell blank unless the card owns one, so auditioning a suit cannot freeze
+a copy of it into 52 rows.
+
+Before this it was per CARD and the fallback was two constants, warm for a
+red suit and cold for a black one, which could not tell Heart from Diamond at
+all — and setting the table's colour meant editing 52 rows.
+
+**To audition four of them:** `npm run sealitaire:bg` renders the table once
+per candidate palette into `build/bg/`, with an index.html, editing only a
+SCRATCH COPY of the project so a palette you do not keep leaves nothing
+behind. Every frame is the same deal (`--data=lab=deal`), so two palettes
+differ only in the thing being looked at. `sealitaire:bg mine '#FFF1F2'
+'#FFF8E7' '#EEF4FF' '#EFF7EE'` renders one of your own, fish/star/bubble/shell
+in that order. Keep one by putting its hexes in the `bg<Suit>` rows, or drag
+them in the tuner and press SAVE.
 
 It works at all because the tank atlas is now cleared to **nothing** and the
 background is composited in `crt.wgsl`, one colour per card table entry. One
@@ -694,7 +908,7 @@ overridable per card by a tanks.csv column of the shorter name):
 
 | tuner | row | what |
 |---|---|---|
-| `pipDrop` | `drop` | world units the formation is biased DOWN the card; negative lifts it |
+| `pipDrop` | `drop` | world units the formation is biased DOWN the card; negative lifts it. Fourteen number cards carried one from when drop clamped PER SEAT and squashed a number rather than moving it — the fix turned each into a number shoved against the bottom edge with a gap above, which is what "the layouts lost their symmetry" was. Those were cleared. A drop on a 2-10 is a real choice now that it moves the formation as one; `npm run test:sealitairetune` lists the cards carrying one so a stale value cannot hide, and `rowGap` is what TIGHTENS a number |
 | `pipRotate` | `rotate` | radians every body leans IN THE CARD PLANE, all on one visual axis |
 | `pipRotateVary` | `rotateVary` | radians of extra lean either side of that, per body |
 | `pipYaw` | `yaw` | radians every body turns about the card's VERTICAL, positive nose toward the viewer |
@@ -732,6 +946,34 @@ animation loop" on a shark means: the rock is `sin(spinPhase*6) * 0.12 *
 (0.6*sway + excite)`, so a card at 0 is still shaken by a play. The sharks,
 the hammerhead, the orcas and the turtle sit at 0 in tanks.csv; the
 crab keeps its rock.
+
+**Row -1 is the card's BOTTOM.** `seat` multiplies `FORMATION`'s row
+straight by the fitted span and world +y is up, so a negative row is low on
+the card. The seven had its odd pip at -0.5 and so printed upside down: the
+double gap — the one gap a seven has that is twice the others, which is the
+shape of a seven — sat at the TOP, with the rows reading 0.656, 0.000,
+-0.328, -0.656 from the top down. It is at 0.5 now, the eight's upper pip
+with the lower one taken away, and the double gap falls between the middle
+and bottom rows where the eye expects it. Every other odd count puts its extra
+pip dead centre (3, 5 and 9 are all `{0, 0}`), which is why the seven was the
+only one that could be wrong this way. "the seven puts its double gap at the
+bottom" in `tests.luau` holds it there.
+
+**The grid is the SCHOOL's, never a body's own.** A school's bodies are
+scattered ±15% in length round the row's `size` (`LEN_MIN`/`LEN_VARY`), so the
+number reads as a shoal rather than a stamp — but the formation used to be
+fitted from *each* body's length, and a short fish then sat further out than
+the long one beside it. No column was straight and no row was level: 4px of a
+120px card at size 1, 13px on a big one, and the drop made it worse, because
+its room was per body too, so every fish fell its own distance and the rows
+sheared apart (six fish came to rest with the top row 0.155 apart, a tenth of
+the card's height). `schoolHalf()` is the one length the resting grid may
+know — half the LONGEST body the school can hold, so the grid is a grid and
+the longest nose still clears the rank. Only the WALLS are a body's own.
+"the number is a grid, whichever fish is the long one" in `tests.luau` asserts
+both halves of that: the rest positions MIRROR about the centre line, and two
+seeds — two different deals of lengths — settle to the same number to the
+pixel.
 
 Three things they get right that the obvious version does not. `pipDrop` is
 **clamped to the padded seat box** rather than added raw — past the edge the
@@ -1254,7 +1496,7 @@ is hit-tested in RAW pointer coordinates while everything else goes through
 they are tens of pixels apart. The panel is tested first and swallows the
 pointer, so a press or a drag inside it never reaches the cards beneath.
 
-Live tuning: press T (or click the title) to open the panel, click a header to fold its category, drag the gutter down its left to scroll, N deals again, W cycles the water mode, R cycles the card rim's material, M mutes the music, drag knobs, press SAVE. The
+Live tuning: press T (or click the title) to open the panel, click a header to fold its category, drag the gutter down its left to scroll, N deals again, C runs the win cascade, W cycles the water mode, R cycles the card rim's material, M mutes the music, drag knobs, press SAVE. The
 script prints `TUNING-SAVE k=v ...`; `npm run sealitaire` (the tune tool
 wrapping the watcher) writes those into tuning.luau and the watcher rebuilds
 with them as the new defaults. From a headless run, paste the line into
@@ -1281,18 +1523,24 @@ a second copy of it.
 ```bash
 npm run sealitaire:rev        # build + build/sealitaire.rev
 npm run sealitaire:push       # build + upload; records push.fileId in rive.yaml
-npm run sealitaire:pull             # ask the open editor for its copy, report
+npm run sealitaire:pull             # download the linked file, report what differs
 npm run sealitaire:pull:apply       # the same, then write the changes back
 npm run sealitaire:pull <file.rev>  # diff a .rev you already have instead
 ```
 
-With no path, pull asks the Rive editor app itself: it answers MCP on
-localhost, and its `export_file` tool snapshots the open document (unsaved
-edits included) as a .rev, which lands in `build/editor.rev`. The editor must
-be open on THIS project's file — the tool checks the tab against
-`push.fileId` in rive.yaml and refuses otherwise, because diffing the wrong
-file reports the whole document removed. `build/sealitaire.rev` is OURS, and
-diffing it against the .rml reports nothing.
+With no path, pull **downloads the linked file itself** — `rive pull`, since
+CLI 1.1.0, which takes `push.fileId` out of rive.yaml and writes the remote
+out as a project. The editor app does not have to be running, nothing has to
+be saved by hand, and there is no MCP session to negotiate (it replaces one:
+the tool used to ask the editor's own endpoint for a `.rev`, which needed the
+right tab open).
+
+**`rive pull` on its own would overwrite this project**, which is what it is
+for — "the remote wins", scripts, shaders and assets included. So the tool
+never points it here. It seeds a THROWAWAY directory with nothing but
+rive.yaml, pulls into that, diffs, and deletes it. An empty seed matters: the
+CLI reports its writes against what is already in the directory, so a copy of
+the project would hide every real difference behind "already matched".
 
 `pull:apply` exists because the workbench runs scripts by name. In a terminal
 `npm run sealitaire:pull -- --apply` is the same thing — and the `--`
@@ -1317,6 +1565,33 @@ stamps on every element and reports only the attributes somebody actually
 changed. `--apply` writes those back into the tag they came from and re-verifies.
 Elements ADDED or REMOVED in the editor are reported and never applied: there
 is no honest way to guess where a new shape belongs in a file organised by hand.
+
+**A change that points at something this project does not have is held back
+too**, and that one is not a nicety. An id attribute — `fontAssetId`, a
+style, an artboard ref — only means anything beside the element it names.
+Ethan restyled the deal button in the editor with a font he added there, and
+the pull brought the REFERENCE down while the `<FontAsset>` and the .ttf,
+both additions, stayed behind: `fontAssetId="1:9409" matches no id in this
+file`, the build dead, and the error a hundred lines from anything about a
+pull. Those changes are now reported with the asset they need
+(`needs FontAsset "Anton SC" 1:9409, file "Anton SC.ttf"`) and left alone.
+Anton SC is in `fonts/` now, declared under the id the editor gave it so the
+two sides agree.
+
+**An asset's NAME follows its file, never the export.** `file` is skipped
+already (it is our path on disk), so a `name` applied on its own splits the
+pair — and the generated blocks make that likely rather than exotic: the sfx
+bank and its processed takes number their `<AudioAsset>` lines POSITIONALLY,
+so after a rebake `0:1400` means a different sound here than in a file pushed
+before it. Ethan's pull copied four remote names onto four unrelated local
+sounds, leaving `file="sfx/seal-07-distant.flac" name="hg-cards-034-phaser"`
+and a bank `npm run test:sealitairesfx` could no longer resolve. Where our
+name is the file's stem, the change is now ignored.
+
+**And a merge that does not compile is undone.** The verify ran after the
+write, so a bad merge exited loudly with the damage already on disk — which
+is how that dangling font outlived the pull that made it. Every file the
+apply touches is snapshotted and put back if the verify fails.
 Two things that look like additions are folded out before the lists print:
 the push renumbers every `ScriptInputArtboard` on the way up (paired back by
 type and name), and the shaders the build scans in from `.wgsl` files have no
@@ -1344,8 +1619,14 @@ and would not otherwise find node at all. `tools/mac-bundle.mjs` writes the
 bundle and its header has the rest — including the one that costs an afternoon,
 that an unsigned bundle silently does not launch and `open` still exits 0.
 
-**The workbench.** `npm run hub` has a Sealitaire section above Servers: open
-the table, watch its output, close it, or regenerate the Dock button.
+The generator is `tools/game-app.mjs`, which is not Sealitaire's: it takes a
+game key and writes that game's button. Blubberball has one too
+(`ball:app`), off the same roster the workbench draws
+its card from — `tools/games.mjs`.
+
+**The workbench.** `npm run hub` has a Games section above Servers, with a row
+per game: open the table, watch its output, close it, or regenerate the Dock
+button. It was Sealitaire's own section until the other two games got doors.
 
 **Only one viewer runs at a time,** and the check is in
 `tools/sealitaire-tune.mjs` rather than in either button, because every way of

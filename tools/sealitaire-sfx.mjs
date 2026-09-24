@@ -91,6 +91,12 @@ const PACKS = join(ROOT, 'rive/sealitaire/sfxPacks.csv');
 // every bake, so it must own a contiguous range nothing else uses.
 const SFX_ID0 = 2000;
 
+// WHAT THE OTHER TOOLS OWN in sfx/. The fx, knock and hover ladders write
+// into the same directory and prune their own by these suffixes; a bank bake
+// must never delete or renumber them. Everything else in there is ours, and
+// ours-but-not-in-this-bake means the source left sfxPacks.csv.
+const OTHERS = /-(?:phaser|lowpass|telephone|distant)$|-p-?\d+$|-h-?\d+$|^knockbus-/;
+
 // 32k, not 44.1k. These are transient-heavy and a low rate dulls the click,
 // but 16kHz of Nyquist is above where a card's snap lives and it lands the
 // whole pack at the size the 320kbps source was — lossless, for free. The
@@ -490,6 +496,13 @@ function main() {
             if (!id) continue;
             if (baked.has(id)) {
                 if (cells[3]) notes.set(id, cells[3]);
+            } else if (!OTHERS.test(id)) {
+                // Ours, and not in this bake: the source is gone from
+                // sfxPacks.csv. Dropped here rather than left to the file
+                // delete further down — that runs AFTER this read, so
+                // carrying it on the strength of the file still being there
+                // made a removal need two bakes to settle.
+                continue;
             } else if (existsSync(join(DEST, `${id}.flac`))) {
                 carried.push(line);
             } else {
@@ -537,11 +550,26 @@ function main() {
         // is not a build error. Carrying strangers out makes the two tools
         // order-independent however either of us writes next.
         const mine = new Set(rows.map(r => `sfx/${r.id}.flac`));
+        // A STRANGER IS NOT THE SAME AS OUR OWN LEFTOVER, and telling them
+        // apart is what the id says. Only this tool allocates from SFX_ID0,
+        // so a line in the block at or above it that is NOT in this bake is a
+        // row we wrote for a source that has since left sfxPacks.csv —
+        // stale, ours, and to be dropped. Carrying it instead made removing
+        // a source impossible: the leftover kept an id the renumbered bake
+        // then wanted, and the collision guard below refused the write with
+        // a message about another tool, which was not what had happened.
+        const stale = [];
         const foreign = sceneSrc.slice(a + open.length, b).split('\n').filter((line) => {
             if (line.trim() === '') return false;
             const m = line.match(/<AudioAsset file="([^"]+)"/);
-            return !(m && mine.has(m[1]));
+            if (m && mine.has(m[1])) return false;
+            const id = (line.match(/id="0:(\d+)"/) || [])[1];
+            if (id && Number(id) >= SFX_ID0) { stale.push(m ? m[1] : line.trim()); return false; }
+            return true;
         });
+        if (stale.length > 0) {
+            console.log(`  dropped ${stale.length} stale line(s) for sources no longer in sfxPacks.csv`);
+        }
         if (foreign.length > 0) {
             console.log(`  carried ${foreign.length} line(s) from another tool out of the bank block`);
         }
@@ -573,6 +601,22 @@ function main() {
         next = sceneSrc.slice(0, at) + block + '\n\n' + sceneSrc.slice(at);
     }
     // Both, together, once nothing can refuse any more.
+    // A SOURCE REMOVED FROM sfxPacks.csv TAKES ITS FILE WITH IT. Its scene
+    // line and index row go above; without this its .flac stays in sfx/,
+    // where it is an orphan the join test reports — reachable by name from a
+    // typo, counted in the bank's size, and shipping.
+    //
+    // Only files this tool owns. The fx, knock and hover ladders write into
+    // the same directory and prune their own by their own suffixes, and a
+    // bank bake must not reach into them: the knock's hundred files are
+    // derived from tankWall's takes and are not in `mine` at all.
+    const keep = new Set(rows.map(r => `${r.id}.flac`));
+    const gone = readdirSync(DEST)
+        .filter(f => f.endsWith('.flac') && !keep.has(f) && !OTHERS.test(f.replace('.flac', '')));
+    for (const f of gone) rmSync(join(DEST, f), { force: true });
+    if (gone.length > 0) {
+        console.log(`  deleted ${gone.length} file(s) for sources no longer in sfxPacks.csv: ${gone.map(f => f.replace('.flac', '')).join(', ')}`);
+    }
     writeFileSync(INDEX, indexText);
     writeFileSync(scene, next);
     console.log(`wrote ${DEST}, ${INDEX}, and ${rows.length} AudioAssets into scene.rml`);

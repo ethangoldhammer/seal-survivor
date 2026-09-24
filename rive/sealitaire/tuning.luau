@@ -48,6 +48,16 @@ local rows: { Row } = {
     { key = 'wagSpeed', min = 0, max = 10, value = 4.2, cat = 'clips' },
     { key = 'jawOpen', min = 0, max = 1.2, value = 0.5, cat = 'clips' },               -- radians at jaw 1
     { key = 'gazeShare', min = 0, max = 1.5, value = 1.1531, cat = 'clips' },
+    -- win: the cascade off the foundations (cascade.luau). C triggers it any time
+    { key = 'winGravity', min = 200, max = 4000, value = 1400, cat = 'win' },         -- px/s^2 pulling a thrown card down (x fit)
+    { key = 'winLaunch', min = 40, max = 900, value = 260, cat = 'win' },             -- px/s sideways at the throw; the arcs' width
+    { key = 'winLift', min = 0, max = 700, value = 190, cat = 'win' },                -- px/s upward at the throw, so a card rises before it falls
+    { key = 'winBounce', min = 0, max = 0.95, value = 0.72, cat = 'win' },            -- of the downward speed kept on each hit; under ~0.5 the cards heap rather than cascade
+    { key = 'winGap', min = 0.02, max = 0.6, value = 0.13, cat = 'win' },             -- seconds between one card leaving a foundation and the next
+    { key = 'winSpin', min = 0, max = 8, value = 1.6, cat = 'win' },                  -- radians/s of tumble at full launch speed
+    { key = 'winFloor', min = 0, max = 200, value = 10, cat = 'win' },                -- px above the bottom edge the cards bounce on
+    { key = 'winRest', min = 0, max = 300, value = 90, cat = 'win' },                 -- px/s of bounce below which a card stops bouncing and just slides off
+    { key = 'winRipple', min = 0, max = 1.5, value = 0.35, cat = 'win' },             -- the ring a bounce pushes into the water; 0 is a silent floor
     -- react: what the seal does after a valid play (react.luau)
     { key = 'reactSpeed', min = 0.3, max = 2.5, value = 1, cat = 'react' },            -- x the choreography's tempo
     { key = 'reactChance', min = 0, max = 1, value = 1, cat = 'react' },              -- how often a play gets a reaction; 1 is every play
@@ -87,16 +97,32 @@ local rows: { Row } = {
     { key = 'swipeArc', min = 0, max = 1.6, value = 0.8, cat = 'fins' },              -- radians either side of the aim the flipper sweeps through. Past about 0.9 the WIND-UP stops growing and only the sweep does: pointing at the deck already has the flipper most of `finReach` from the pose the clip left it in, so the backswing runs into that clamp first
     { key = 'swipeTime', min = 0.15, max = 1.5, value = 0.5, cat = 'fins' },          -- seconds the whole gesture takes: wind up, sweep, settle
     -- stock
+    { key = 'stockHover', min = 0, max = 1, value = 0, cat = 'stock' },                -- WHICH HOVER: 0 the PEEK (the top card alone separates up and left off the pile), 1 the RIBBON (the whole deck lifts into a chain on the cursor, wind-up throw and all — kept as a stub). Every stock* row below the peek's three belongs to the ribbon
+    { key = 'stockPeekX', min = 0, max = 80, value = 18, cat = 'stock' },             -- PEEK: px the top card slides LEFT off the pile. Left because the waste is the slot to the right — separating toward it would cover the card just drawn
+    { key = 'stockPeekY', min = 0, max = 80, value = 14, cat = 'stock' },             -- PEEK: px it slides UP. Capped by stockRise/stockClear like the ribbon, so it can never reach the chrome
+    { key = 'stockPeekTilt', min = -0.3, max = 0.3, value = 0.05, cat = 'stock' },      -- PEEK: radians it leans as it goes. Signed — the sign is which way it lies over
     { key = 'stockRise', min = 0, max = 300, value = 129.85, cat = 'stock' },             -- px the top card lifts
     { key = 'stockClear', min = 0, max = 60, value = 8, cat = 'stock' },              -- px kept between the fan's top card and the chrome above it
-    { key = 'stockSway', min = 0, max = 80, value = 22, cat = 'stock' },               -- px the ribbon weaves
-    { key = 'stockTilt', min = 0, max = 0.6, value = 0.18, cat = 'stock' },            -- radians the cards lean
-    { key = 'stockWobble', min = 0, max = 4, value = 1.1, cat = 'stock' },             -- the underwater sway, per second
-    { key = 'stockEase', min = 1, max = 15, value = 6, cat = 'stock' },                -- how fast the fan RISES, and how fast a click drops it
-    { key = 'stockSettle', min = 0.5, max = 15, value = 2.4, cat = 'stock' },          -- how fast it eases back down once the pointer leaves — lower than stockEase on purpose: arriving is an answer, leaving is a settle
+    { key = 'stockChain', min = 0.05, max = 0.95, value = 0.8, cat = 'stock' },            -- how much of the way back toward its own slot each card sits from the one ABOVE it. It is per CARD, not per deck: 0.8 puts the second card a fifth of the ribbon behind the head at four cards left and at twenty-four, so the top card always stands alone and a draw comes off the top rather than out of the middle. High is a long loose ribbon, low is a deck with one card lifted off it
+    { key = 'stockBias', min = 0, max = 140, value = 52, cat = 'stock' },             -- px the ribbon bellies out to the LEFT, and how far left of the column it parks. The waste is the slot to the RIGHT: a fan that cuts straight up across it hides the card just drawn. It buys the head its room to the left as well, so the two cannot disagree
+    { key = 'stockSway', min = 0, max = 80, value = 7, cat = 'stock' },               -- px the ribbon weaves, on top of that belly. Subtle: the cursor is what moves this ribbon, and the sway is only the water it hangs in
+    { key = 'stockTilt', min = 0, max = 0.6, value = 0.06, cat = 'stock' },            -- radians of weave in the cards' lean. The lean that reads is the chain's own direction, which is not tunable because it is geometry
+    { key = 'stockWobble', min = 0, max = 4, value = 0.42, cat = 'stock' },             -- the underwater sway, per second
+    { key = 'stockLead', min = 60, max = 800, value = 300, cat = 'stock' },           -- the HEAD's spring: how hard the top card holds the cursor. It is the one card that may not lag, so this stays well above stockFollow
+    { key = 'stockFollow', min = 20, max = 500, value = 110, cat = 'stock' },         -- the BODY's spring: how loosely every card under the head trails the one above it. Low is a long lazy ribbon that keeps moving after the hand stops
+    { key = 'stockDamp', min = 3, max = 60, value = 18, cat = 'stock' },              -- the ribbon's damping, both ends. What it means depends on the spring it is damping: at 18 the head (stockLead 300) is smooth with a little give and the body (stockFollow 110) is near critical, which is the way round it wants to be — the card on the cursor may breathe, the ribbon under it may not swing. Halve it and the whole chain starts to oscillate, which is a different animal from a fan
+    { key = 'stockEase', min = 1, max = 15, value = 3, cat = 'stock' },                -- how fast the fan RISES, and how fast a click drops it
+    { key = 'stockSettle', min = 0.5, max = 15, value = 1.5, cat = 'stock' },          -- how fast it eases back down once the pointer leaves — lower than stockEase on purpose: arriving is an answer, leaving is a settle
     { key = 'drawTime', min = 0.12, max = 1.2, value = 0.42, cat = 'stock' },         -- seconds the drawn card takes to turn over and cross into the waste. The flip IS the journey, so this is the whole gesture
     { key = 'drawArc', min = 0, max = 0.6, value = 0.22, cat = 'stock' },             -- how far toward the viewer it comes over the top of that arc
     { key = 'stockDrop', min = 2, max = 30, value = 12, cat = 'stock' },               -- how fast a click drops the fan into the flip
+    -- the wind-up: press and hold the deck, and the release throws the card
+    { key = 'holdFull', min = 0.1, max = 2, value = 0.6, cat = 'stock' },             -- seconds of holding the deck that count as a FULL wind-up. Everything below scales with how much of this the hand gave it, and a tap gives none: that is the draw this table always had
+    { key = 'holdWind', min = 0, max = 0.8, value = 0.34, cat = 'stock' },            -- how much of the fan's height a full wind-up takes back INTO the deck. The card does not go anywhere while it is wound; the deck pulls it in, and the flight springs out of that
+    { key = 'holdFlip', min = 0, max = 4, value = 2, cat = 'stock' },                 -- extra WHOLE turns at a full wind-up. Whole, because a half would land the card on its back
+    { key = 'holdArc', min = 0, max = 3, value = 1.5, cat = 'stock' },                -- how much further over the top of its arc a thrown card comes, x drawArc
+    { key = 'holdTime', min = 0, max = 1.5, value = 0.5, cat = 'stock' },             -- how much longer a full throw takes than a tap, x drawTime. More turns need more seconds or they are a blur
+    { key = 'holdGoo', min = 0, max = 20, value = 6, cat = 'stock' },                 -- droplets a full throw tears off the ribbon as the card leaves, x gooSplash — and they are thrown FREE for longer than a landing's, so they get clear of the deck before its own goo pulls them back in. The pass holds 24 drops at once and the oldest give way, so past about 8 here (x gooSplash) this is churn rather than more water. The landing's own slap is on top of it
     { key = 'stockAura', min = 0.02, max = 2, value = 0.35, cat = 'stock' },           -- seconds the hoverAura bed fades in and out by, on the pointer arriving and leaving
     -- tanks
     { key = 'fishSpin', min = 0, max = 4, value = 1.2, cat = 'tanks' },                -- swirl, radians/s
@@ -147,7 +173,7 @@ local rows: { Row } = {
     { key = 'celSoft', min = 0.01, max = 1, value = 0.18, cat = 'toon' },             -- how soft each band's edge is, as a fraction of one band
     { key = 'celShadow', min = 0, max = 1, value = 0.42, cat = 'toon' },              -- how lit the darkest band is; 0 is black, 1 is no shading at all
     { key = 'celSpec', min = 0, max = 1, value = 0.35, cat = 'toon' },                -- how much of the body the flat highlight covers; 0 removes it
-    { key = 'lineWidth', min = 0, max = 0.05, value = 0, cat = 'toon' },          -- outline weight in TANK units, so it is the same on every creature; 0 is no outline and skips the pass
+    { key = 'lineWidth', min = 0, max = 0.05, value = 0.01396, cat = 'toon' },          -- outline weight in TANK units, so it is the same on every creature; 0 is no outline and skips the pass
     { key = 'lineR', min = 0, max = 1, value = 0.04, cat = 'toon' },
     { key = 'lineG', min = 0, max = 1, value = 0.09, cat = 'toon' },
     { key = 'lineB', min = 0, max = 1, value = 0.16, cat = 'toon' },
@@ -221,42 +247,61 @@ local rows: { Row } = {
     { key = 'reflectTilt', min = 1, max = 12, value = 5, cat = 'surface' },           -- slope exaggeration before the Fresnel: real water at this scale is far too flat to catch anything
     -- crt
     { key = 'curve', min = 0, max = 0.15, value = 0.012903, cat = 'crt' },
-    { key = 'scanlines', min = 0, max = 1, value = 0.3926, cat = 'crt' },
+    { key = 'scanlines', min = 0, max = 1, value = 0.18968, cat = 'crt' },
     { key = 'aberration', min = 0, max = 0.02, value = 0, cat = 'crt' },
     { key = 'vignette', min = 0, max = 1, value = 0.83606, cat = 'crt' },
     -- cards
     { key = 'hoverMargin', min = 0, max = 40, value = 11.695, cat = 'cards' },             -- px: a hover is kept this far outside, taken only this/2 inside
     { key = 'hoverFalloff', min = 0, max = 1, value = 0.45, cat = 'cards' },          -- how much of the pop a card loses when taken by its EDGE rather than its centre. 0 is the old hard hitbox: every part of the rect worth the same
+    { key = 'hoverGrab', min = 0, max = 20, value = 0, cat = 'cards' },              -- px INSIDE a card's edge the pointer must reach to take the hover; 0 is the frame itself. The release is hoverMargin and stays sticky
     { key = 'hoverSettle', min = 0, max = 0.4, value = 0.09, cat = 'cards' },          -- s a switch or leave must hold before the seal hears of it
     { key = 'cardSpring', min = 60, max = 800, value = 736.39, cat = 'cards' },
-    { key = 'dragLag', min = 3, max = 80, value = 22, cat = 'cards' },                -- per second the run in hand chases the pointer. High is welded to the cursor, low is carried through water
+    { key = 'dragLag', min = 3, max = 80, value = 11.121, cat = 'cards' },                -- per second the run in hand chases the pointer. High is welded to the cursor, low is carried through water
     { key = 'dragTrail', min = 0, max = 0.9, value = 0.45, cat = 'cards' },           -- how much further behind each card of the run is than the one above it: 0 is a rigid stack, high bends the run through a turn
     { key = 'dragBank', min = 0, max = 0.002, value = 0.0006, cat = 'cards' },        -- radians per px/s of hand speed the card leans into its turn
-    { key = 'cardDamp', min = 5, max = 60, value = 19.076, cat = 'cards' },
+    { key = 'cardDamp', min = 5, max = 60, value = 19.552, cat = 'cards' },
     -- the hover pop: the run under the pointer rises as a wave (hover.luau); no shear, the card keeps its shape
-    { key = 'hoverScale', min = 1, max = 1.2, value = 1.06, cat = 'cards' },            -- how much a popped card grows; small keeps the fan readable
-    { key = 'popRise', min = 0, max = 30, value = 10, cat = 'cards' },                 -- px a popped card rises up the screen (x fit)
-    { key = 'popSpring', min = 40, max = 600, value = 220, cat = 'cards' },            -- the pop's stiffness
+    { key = 'hoverScale', min = 1, max = 1.2, value = 1.2, cat = 'cards' },            -- how much a popped card grows; small keeps the fan readable
+    { key = 'popRise', min = 0, max = 30, value = 17.963, cat = 'cards' },                 -- px a popped card rises up the screen (x fit)
+    { key = 'popSpring', min = 40, max = 600, value = 397.95, cat = 'cards' },            -- the pop's stiffness
     { key = 'popDamp', min = 2, max = 40, value = 11, cat = 'cards' },                 -- its damping; under ~2*sqrt(spring) it overshoots, which is the liquid in it
-    { key = 'popWave', min = 0, max = 0.15, value = 0.045, cat = 'cards' },            -- s between one card of the run popping and the next below it: the wave
-    { key = 'pressKick', min = 0, max = 12, value = 4, cat = 'cards' },                -- the dip a press gives the card on its way into the hand
-    { key = 'sway', min = 0, max = 0.05, value = 0.024783, cat = 'cards' },
+    { key = 'popWave', min = 0, max = 0.15, value = 0.076755, cat = 'cards' },            -- s between one card of the run popping and the next below it: the wave
+    { key = 'pressKick', min = 0, max = 12, value = 6.3817, cat = 'cards' },                -- the dip a press gives the card on its way into the hand
+    { key = 'sway', min = 0, max = 0.05, value = 0.0053607, cat = 'cards' },
     { key = 'cardRim', min = 0, max = 2, value = 1, cat = 'cards' },                  -- the rim's strength; 0 is a card with no edge at all
-    { key = 'cardRimWidth', min = 0, max = 20, value = 3.5, cat = 'cards' },          -- artboard px of the card's edge the bevel takes; 3.5 is the trim stroke in table-cards.rml (Plate)
-    { key = 'cardRimMode', min = 0, max = 6, value = 6, cat = 'cards' },              -- the material: 0 pearl, 1 emissive, 2 metallic, 3 reflective, 4 refractive, 5 holographic, 6 chrome (the trim: brushed metal mirroring the water). R cycles them
+    { key = 'cardRimWidth', min = 0, max = 20, value = 0, cat = 'cards' },          -- artboard px of the card's edge the bevel takes; 3.5 is the trim stroke in table-cards.rml (Plate)
+    { key = 'cardRimMode', min = 0, max = 6, value = 1, cat = 'cards' },              -- the material: 0 pearl, 1 emissive, 2 metallic, 3 reflective, 4 refractive, 5 holographic, 6 chrome (the trim: brushed metal mirroring the water). R cycles them
     -- rim: the metal itself (crt.wgsl's metallic and chrome materials; cardRimMode picks, R cycles)
     { key = 'metalTint', min = 0, max = 1, value = 0, cat = 'rim' },                  -- 0 chrome grey .. 1 gold
-    { key = 'metalBody', min = 0.2, max = 2.5, value = 1, cat = 'rim' },              -- the wire's own brightness, before the reflection and the glint
+    { key = 'metalBody', min = 0.2, max = 2.5, value = 2.5, cat = 'rim' },              -- the wire's own brightness, before the reflection and the glint
     { key = 'metalGrain', min = 0, max = 1, value = 1, cat = 'rim' },                 -- how much the brushed grain shows; 0 is a smooth polish
     { key = 'metalGrainLines', min = 8, max = 160, value = 64, cat = 'rim' },         -- brush lines round the whole card
-    { key = 'metalGlint', min = 0, max = 3, value = 1, cat = 'rim' },                 -- the travelling glint's strength
-    { key = 'metalGlintWidth', min = 0, max = 1, value = 0.35, cat = 'rim' },         -- 0 a tight streak .. 1 a broad sheen
-    { key = 'metalMirror', min = 0, max = 2, value = 1, cat = 'rim' },                -- how much of the water the chrome mirrors
-    { key = 'metalSeam', min = 0, max = 1, value = 0.55, cat = 'rim' },               -- the dark seam where the chrome meets the plate; 0 is none
+    { key = 'metalGlint', min = 0, max = 3, value = 3, cat = 'rim' },                 -- the travelling glint's strength
+    { key = 'metalGlintWidth', min = 0, max = 1, value = 0.82511, cat = 'rim' },         -- 0 a tight streak .. 1 a broad sheen
+    { key = 'metalMirror', min = 0, max = 2, value = 1.7877, cat = 'rim' },                -- how much of the water the chrome mirrors
+    { key = 'metalSeam', min = 0, max = 1, value = 1, cat = 'rim' },               -- the dark seam where the chrome meets the plate; 0 is none
     { key = 'cardShadow', min = 0, max = 1, value = 0, cat = 'cards' },            -- the drop shadow, almost all of it the card's LIFT
-    { key = 'tankBg', min = 0, max = 2, value = 2, cat = 'cards' },                   -- scales every tank background at once; the colours themselves are tanks.csv `bg`
+    { key = 'tankBg', min = 0, max = 2, value = 0.85131, cat = 'cards' },                   -- scales every tank background at once; the colours themselves are the four `bg<Suit>` rows below (a tanks.csv `bg` cell overrides one card). 1, so a suit row IS the colour: at 2 every channel above 0.5 clamped white and half of each suit slider did nothing
     { key = 'inkGlow', min = 0, max = 1, value = 0, cat = 'cards' },                      -- the master for the light behind a rank, red and white alike. OFF — the markup that draws it is still in cards.rml, turn this up to bring it back
     { key = 'inkPulse', min = 0, max = 3, value = 1.9707, cat = 'cards' },                -- how hard the beat lights the white glow behind a black rank (the glow itself is markup: cards.rml, Corner)
+    -- THE SUITS' WATER. One background per suit, which is the level a card's
+    -- family is decided at: a tanks.csv `bg` cell is an OVERRIDE for one card
+    -- and is blank on all 52, so these four are what the table actually shows.
+    -- Live, so dragging one repaints thirteen cards at once — the whole point
+    -- of having them here rather than in the row. fish is Heart, star
+    -- Diamond, bubble Spade, shell Club. `tankBg` above still scales all four.
+    { key = 'bgFishR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgFishG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgFishB', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgStarR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgStarG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgStarB', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgBubbleR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgBubbleG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgBubbleB', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgShellR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgShellG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgShellB', min = 0, max = 1, value = 1, cat = 'suits' },
     -- music
     { key = 'musicVolume', min = 0, max = 1, value = 0.5, cat = 'music' },            -- the track itself
     { key = 'sfxVolume', min = 0, max = 1, value = 0.8, cat = 'music' },              -- the card sounds (re-deal, flip, grab, play, invalid, foundation)
@@ -267,9 +312,9 @@ local rows: { Row } = {
     -- script never reads it; the baker does.
     { key = 'sfxLowpass', min = 200, max = 16000, value = 2000, cat = 'music' },
     { key = 'musicRipple', min = 0, max = 3, value = 2.7472, cat = 'music' },            -- a band onset's ripple strength, on the same scale a card play's is (0.35-1.0); 0 plays the track and never shows it
-    { key = 'musicSwell', min = 0, max = 0.5, value = 0.44311, cat = 'music' },
-    { key = 'musicWash', min = 0, max = 2, value = 1, cat = 'music' },
-    { key = 'musicDebug', min = 0, max = 5, value = 0, cat = 'music' },                 -- seconds between the music heartbeat in the console; 0 is off                  -- the win's ring-out, against the -10dB send the bake put it at; 0 cuts the music dead instead          -- the track's level added to the water's energy, as a bed
+    { key = 'musicSwell', min = 0, max = 0.5, value = 0.44311, cat = 'music' },          -- the track's level added to the water's energy, as a bed
+    { key = 'musicWash', min = 0, max = 2, value = 1, cat = 'music' },                  -- the win's ring-out, against the -10dB send the bake put it at; 0 cuts the music dead instead
+    { key = 'musicDebug', min = 0, max = 5, value = 0, cat = 'music' },                 -- seconds between the music heartbeat in the console, and >0 runs the seek probe at startup; 0 is off
     -- other
     { key = 'refract', min = 0, max = 40, value = 20.567, cat = 'other' },
     { key = 'turbulence', min = 0, max = 2, value = 0.40498, cat = 'other' },

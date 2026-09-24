@@ -42,4 +42,43 @@ const realHead = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../
 for (const key of TANK_FIELDS) assert.ok(realHead.includes(key), `tanks.csv has a ${key} column`);
 for (const col of realHead) if (!['card', 'flip', 'knock', 'clip', 'notes'].includes(col)) assert.ok(TANK_FIELDS.includes(col), `${col} is saveable from the panel`);
 
+// ---------------------------------------------------------------------------
+// THE TABLE ITSELF: a number card's pips read CENTRED.
+//
+// 2-10 are the pip layout made of fish — the count IS the number — so the
+// formation belongs in the middle of the card the way a printed pip block
+// does. `drop` biases it DOWN, which is framing for a lone creature (an ace
+// or a court card) and is simply off-centre on a number.
+//
+// This exists because fourteen number cards carried one. `drop` used to
+// clamp PER SEAT, so a big value parked the bottom row and squashed the rows
+// above onto it — it read as "tighten the number", and it was tuned that way
+// by eye. Fixing the clamp (it biases the whole formation now and stops as
+// one) turned every one of those into a number shoved against the bottom
+// edge with a gap above it. Nothing could see that but a person looking at
+// the table, so it is checked here: `rowGap` is how a number is tightened.
+{
+  const text = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../rive/sealitaire/tanks.csv'), 'utf8');
+  const lines = text.trim().split('\n');
+  const head = lines[0].split(',');
+  const at = { card: head.indexOf('card'), drop: head.indexOf('drop') };
+  const dropped = lines.slice(1)
+    .map((l) => l.split(','))
+    .filter((c) => !['A', 'J', 'Q', 'K'].includes((c[at.card] || '').split(' ')[0]))
+    .filter((c) => (c[at.drop] || '').trim())
+    .map((c) => `${c[at.card]} (drop ${c[at.drop].trim()})`);
+  // REPORTED, NOT FAILED. It was an assertion for about an hour, and in that
+  // hour Ethan set seven new drops from the live tuner — which is the answer
+  // to the question the gate was asking. Now that drop biases the whole
+  // formation as one (it used to squash it), an off-centre number is a look
+  // somebody can want, so this says what it sees and gets out of the way.
+  // What it is still worth saying: the fourteen it found the first time were
+  // STALE, tuned against the squash, and every one of them read as a number
+  // shoved against the bottom edge.
+  if (dropped.length) {
+    console.log(`  --   ${dropped.length} number card(s) sit off-centre by a drop: ${dropped.join(', ')}`);
+    console.log('       (deliberate is fine — drop moves the whole formation now. rowGap is what tightens one.)');
+  }
+}
+
 console.log('sealitaire tune: 11 checks passed');

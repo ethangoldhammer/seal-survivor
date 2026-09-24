@@ -111,8 +111,10 @@ const { activeElement, resetElements } = await import('../path/src/systems/eleme
 const { rarityMul } = await import('../path/src/systems/rarity.js');
 const {
   initUpgradeDebug, setUpgradeDebugVisible, setUpgradeDebugChoice,
-  upgradeDebugState, grantUpgrade, spawnCreature,
+  upgradeDebugState, grantUpgrade, spawnCreature, revokeUpgrade,
 } = await import('../path/src/ui/upgradeDebug.js');
+const playtest = await import('../path/src/systems/playtest.js');
+const { isDebugRun, debugRunReason } = await import('../path/src/systems/playtestAnalysis.js');
 
 // The search field, driven through its own listener rather than through the
 // setter seam — the seam proves the filter and this proves the wiring, and the
@@ -521,6 +523,65 @@ clear.click();
 check('clears every pick', player.upgrades.length === 0);
 const left = Object.keys(baseline).filter((k) => typeof baseline[k] === 'number' && baseline[k] !== player.stats[k]);
 check('and the stat block with them', left.length === 0, left.join(', '));
+
+// ---------------------------------------------------------------------------
+section('THE STAMP — a run this panel touched is not a playtest');
+// ---------------------------------------------------------------------------
+// The panel's whole job is to produce runs that are worth LOOKING at and not
+// worth AVERAGING, so every door out of it has to mark the run on the way
+// through. Asserted door by door rather than once, because the failure this
+// guards against is a new button added without the stamp — and that button is
+// by definition not the one an existing test clicks.
+//
+// Read through isDebugRun, the same predicate the atlas and the report use, so
+// a field renamed on one side fails here instead of quietly un-filtering
+// twenty-nine runs.
+{
+  const stamped = (act) => {
+    reset();
+    playtest.beginRun({});
+    act();
+    const run = playtest.currentRun();
+    return { debug: isDebugRun(run), why: debugRunReason(run) };
+  };
+
+  let r = stamped(() => grantUpgrade('rapidFire', { rarity: 'common' }));
+  check('granting an upgrade stamps the run', r.debug, r.why);
+  check('...as a granted build', r.why === 'granted upgrades', r.why);
+
+  r = stamped(() => {
+    grantUpgrade('rapidFire', { rarity: 'common' });
+    revokeUpgrade('rapidFire');
+  });
+  check('taking one back stamps it too', r.debug, r.why);
+
+  r = stamped(() => {
+    grantUpgrade('magnet', { rarity: 'common' });
+    findAll((n) => n.textContent === 'Clear all')[0].click();
+  });
+  check('Clear all stamps it', r.debug, r.why);
+
+  r = stamped(() => spawnCreature('fish', 3));
+  check('spawning creatures stamps the run', r.debug, r.why);
+  check('...as a spawned world, not a granted build', r.why === 'spawned creatures', r.why);
+
+  r = stamped(() => spawnCreature('notACreature', 3));
+  check('a spawn that produced nothing does NOT stamp it', !r.debug,
+    'a request the arena refused changed nothing about the run');
+
+  r = stamped(() => {
+    grantUpgrade('magnet', { rarity: 'common' });
+    spawnCreature('fish', 2);
+  });
+  check('both doors name both reasons', r.why === 'granted upgrades + spawned creatures', r.why);
+
+  // The case the filter exists for: an untouched run has to stay readable.
+  playtest.beginRun({});
+  check('a run nobody interfered with is not flagged', !isDebugRun(playtest.currentRun()));
+  check('...and a missing run is not flagged either', !isDebugRun(null));
+  // Left open on purpose. endRun persists, and the stub has no localStorage —
+  // the warning it prints reads like a failure in a log that has none.
+}
 
 reset();
 resetElements(null);

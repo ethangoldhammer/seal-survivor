@@ -161,8 +161,15 @@ end
 -- A landing: `strength` 0..1 sets how many, how fast, how big. The drops
 -- start ON the edge of the card (hw, hh from its centre), not inside it —
 -- born under the silhouette they would fuse before they were ever seen.
-local function splash(g: Goo, x: number, y: number, hw: number, hh: number, strength: number, count: number)
+-- `free` is how long a drop flies before the pull home starts on it, and it
+-- is the difference between a splash and a THROW: the pull is 2400px/s2 and
+-- it wins in a few frames, so drops born at the deck's edge are swallowed by
+-- the deck before they have gone anywhere. A landing wants that — the goo
+-- belongs to the stack it lands on — and a card ripped off the top of a wound
+-- deck wants its water to get out first. Blank is the landing's 0.18.
+local function splash(g: Goo, x: number, y: number, hw: number, hh: number, strength: number, count: number, free: number?)
     local px = g.px
+    local hold = free or 0.18
     for _ = 1, count do
         local a = math.random() * math.pi * 2
         local ca, sa = math.cos(a), math.sin(a)
@@ -172,7 +179,7 @@ local function splash(g: Goo, x: number, y: number, hw: number, hh: number, stre
         addDrop(g, {
             x = x + ca * (edge + 6 * px), y = y + sa * (edge + 6 * px),
             vx = ca * speed, vy = sa * speed,
-            r = r, age = 0, free = 0.18 + 0.25 * math.random(), life = 0, fusing = false,
+            r = r, age = 0, free = hold + 0.25 * math.random(), life = 0, fusing = false,
         })
     end
 end

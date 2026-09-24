@@ -28,7 +28,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { analyzeRun, analyzeRuns, formatRunReport, formatAggregateReport, formatClock } from '../path/src/systems/playtestAnalysis.js';
+import { analyzeRun, analyzeRuns, formatRunReport, formatAggregateReport, formatClock, isDebugRun, debugRunReason } from '../path/src/systems/playtestAnalysis.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LOG = resolve(HERE, '../playtest/runs.jsonl');
@@ -42,7 +42,7 @@ const REMOTE_LOG = resolve(HERE, '../playtest/remote.jsonl');
 function parseArgs(argv) {
   const args = {
     last: Infinity, since: null, min: 60, runs: false, json: false,
-    files: null, build: null, client: null, who: false,
+    files: null, build: null, client: null, who: false, debugRuns: false,
   };
   let remote = false;
   let all = false;
@@ -59,6 +59,7 @@ function parseArgs(argv) {
     else if (a === '--build') args.build = argv[++i];
     else if (a === '--client') args.client = argv[++i];
     else if (a === '--who') args.who = true;
+    else if (a === '--debug-runs') args.debugRuns = true;
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
     else {
       console.error(`unknown option: ${a}`);
@@ -90,6 +91,8 @@ function printHelp() {
     --build <sha>   only runs played on this build (prefix match)
     --client <id>   only runs from one browser
     --who           summarise who and what is in the log, print nothing else
+    --debug-runs    read ONLY the runs the u panel granted or spawned into
+                    (they are set aside by default)
 `);
 }
 
@@ -211,6 +214,15 @@ const byId = new Map();
 for (const r of loaded) byId.set(r.id ?? Symbol(), r);
 let runs = [...byId.values()];
 
+// SET ASIDE THE RUNS THE DEBUG PANEL TOUCHED, before any other filter, so the
+// count printed below is a count of runs that actually measure something.
+// Counted and named rather than silently dropped — a report that quietly
+// discards data is worse than one that shows bad data, because only one of
+// them can be argued with. `--debug-runs` reads them anyway, for the case
+// where the thing you are looking at IS what the panel did.
+const debugRuns = runs.filter(isDebugRun);
+runs = args.debugRuns ? debugRuns : runs.filter((r) => !isDebugRun(r));
+
 if (args.since != null && !Number.isNaN(args.since)) runs = runs.filter((r) => (r.startedAt ?? 0) >= args.since);
 if (args.build) runs = runs.filter((r) => (r.meta?.build ?? '').startsWith(args.build));
 if (args.client) runs = runs.filter((r) => (r.meta?.client ?? '') === args.client);
@@ -219,8 +231,20 @@ runs.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
 if (Number.isFinite(args.last)) runs = runs.slice(-args.last);
 
 if (!runs.length) {
-  console.error('No runs matched those filters.');
+  console.error(args.debugRuns
+    ? 'No runs in this log were touched by the debug panel.'
+    : 'No runs matched those filters.');
   process.exit(1);
+}
+
+if (debugRuns.length && !args.debugRuns) {
+  const reasons = new Map();
+  for (const r of debugRuns) {
+    const why = debugRunReason(r);
+    reasons.set(why, (reasons.get(why) ?? 0) + 1);
+  }
+  const detail = [...reasons].map(([why, n]) => `${n} ${why}`).join(', ');
+  console.log(`\n${debugRuns.length} run${debugRuns.length === 1 ? '' : 's'} set aside: the u panel interfered (${detail}). --debug-runs to read them.`);
 }
 
 if (args.who) {
