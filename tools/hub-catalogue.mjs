@@ -222,6 +222,9 @@ const GROUP_BY_NAME = {
   // The three Dock buttons, written into ~/Applications the way `film:setup`
   // does. One generator, one row of tools/games.mjs each — see game-app.mjs.
   'sealitaire:app': 'Servers', 'ball:app': 'Servers', 'wetris:app': 'Servers',
+  // ...and the panel's own button, which is the same kind of thing: it writes
+  // a bundle that starts a server and opens a tab at it.
+  'hub:app': 'Servers',
   // Blubberball's door. It starts a dev server only if there is not one
   // already, so it is the same kind of thing as the two viewers above even
   // though what it opens is a browser tab.

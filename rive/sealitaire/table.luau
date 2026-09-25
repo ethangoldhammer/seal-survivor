@@ -51,6 +51,7 @@ local LAYOUT = require('layout')
 local PAD = require('pad')
 local BUB = require('bubbles')
 local FOAM_STEPS = 8   -- most sub-steps the foam takes in one draw (see drawFoam)
+local FOAM_CATCHUP = 3 -- most it takes after a slow frame; the rest of the gap is dropped
 
 -- THE LIVE VALUES. Every slider in tuning.luau, by key, read each frame by
 -- whatever it tunes — the panel writes here, "save" prints them for
@@ -4544,47 +4545,53 @@ end
 
 -- The sim's inputs for a tank card: its row's count, size and colours, the
 -- tuner's numbers, and the walls.
+-- ONE TABLE, FILLED IN PLACE. This runs for every face-up tank twice a frame
+-- (the sim, then the draw), and as a fresh ~70-field literal it was the
+-- biggest single source of garbage on the table — the collector's pauses are
+-- the hitches. Safe to share because neither caller keeps it: BAIT.update and
+-- BAIT.write read it and return, and the next call overwrites it.
+local INPUTS: any = {}
 local function tankInputs(self: Table, rec: TankRec, hovered: boolean, pressed: boolean, played: boolean, dragging: boolean, velX: number, velY: number, revealed: boolean): BAIT.Inputs
     local sp = rec.species
-    return {
-        hovered = hovered, pressed = pressed, played = played, dragging = dragging, velX = velX, velY = velY,
-        revealed = revealed, enterSpeed = T.entranceSpeed,
-        -- The clip: one cycle per its duration, scaled by the tuner. A
-        -- species baked at rest has no duration and reads as no clip.
-        clipRate = if sp.frames > 1 and sp.duration > 0 then T.clipSpeed / sp.duration else 0,
-        clipWeight = T.clipWeight,
-        bio = rec.bioColor, bioStrength = rec.bio,
-        bioSpeed = if rec.bioSpeed ~= nil then rec.bioSpeed else T.bioSpeed,
-        bioScale = if rec.bioScale ~= nil then rec.bioScale else T.bioScale,
-        bioContrast = if rec.bioContrast ~= nil then rec.bioContrast else T.bioContrast,
-        bioCoverage = if rec.bioCoverage ~= nil then rec.bioCoverage else T.bioCoverage,
-        bioPan = math.rad(if rec.bioPan ~= nil then rec.bioPan else T.bioPan),
-        bioEvolve = if rec.bioEvolve ~= nil then rec.bioEvolve else T.bioEvolve,
-        count = rec.count, size = rec.size * T.fishSize, back = rec.back, belly = rec.belly,
-        spin = T.fishSpin, radius = T.fishRadius, exciteSpin = T.fishExcite, scatterPush = T.fishScatter,
-        padX = rec.padX or T.fishPadX, padY = rec.padY or T.fishPadY,
-        colGap = rec.colGap or T.pipColGap, rowGap = rec.rowGap or T.pipRowGap,
-        -- `or` is wrong for a signed override: a row that means 0 would fall
-        -- straight back to the tuner's number. These read the cell's presence.
-        drop = if rec.drop ~= nil then rec.drop else T.pipDrop,
-        rotate = if rec.rotate ~= nil then rec.rotate else T.pipRotate,
-        rotateVary = if rec.rotateVary ~= nil then rec.rotateVary else T.pipRotateVary,
-        yaw = if rec.yaw ~= nil then rec.yaw else T.pipYaw,
-        roll = if rec.roll ~= nil then rec.roll else T.pipRoll,
-        sway = if rec.sway ~= nil then rec.sway else T.pipSway,
-        -- The court's creature holds still; an ace's apex predator still
-        -- loops — unless the row says otherwise (`loop`).
-        holds = if rec.loop ~= nil then rec.loop < 0.5 else rec.rank >= 11,
-        swirlHold = T.swirlHold, swirlIn = T.swirlIn, swirlOut = T.swirlOut,
-        slosh = T.fishSlosh, spring = T.fishSpring, damp = T.fishDamp, bounce = T.fishBounce,
-        turn = T.fishTurn, turnMax = math.rad(T.fishTurnMax),
-        hitSpeed = T.fishHitSpeed, hitGap = T.fishHitGap,
-        dentAmount = T.dentAmount, dentFreq = T.dentFreq, dentDamp = T.dentDamp,
-        bubbleCount = T.tankBubbles, bubbleSize = T.tankBubbleSize,
-        bubbleRise = T.tankBubbleRise, bubbleLife = T.tankBubbleLife, bubbleSpread = T.tankBubbleSpread,
-        loosen = T.rattleLoosen, still = T.rattleStill, settle = T.rattleSettle, friction = T.rattleFriction, gravity = T.rattleGravity, tumble = T.rattleTumble,
-        walls = WALLS,
-    }
+    local o = INPUTS
+    o.hovered, o.pressed, o.played, o.dragging, o.velX, o.velY = hovered, pressed, played, dragging, velX, velY
+    o.revealed, o.enterSpeed = revealed, T.entranceSpeed
+    -- The clip: one cycle per its duration, scaled by the tuner. A
+    -- species baked at rest has no duration and reads as no clip.
+    o.clipRate = if sp.frames > 1 and sp.duration > 0 then T.clipSpeed / sp.duration else 0
+    o.clipWeight = T.clipWeight
+    o.bio, o.bioStrength = rec.bioColor, rec.bio
+    o.bioSpeed = if rec.bioSpeed ~= nil then rec.bioSpeed else T.bioSpeed
+    o.bioScale = if rec.bioScale ~= nil then rec.bioScale else T.bioScale
+    o.bioContrast = if rec.bioContrast ~= nil then rec.bioContrast else T.bioContrast
+    o.bioCoverage = if rec.bioCoverage ~= nil then rec.bioCoverage else T.bioCoverage
+    o.bioPan = math.rad(if rec.bioPan ~= nil then rec.bioPan else T.bioPan)
+    o.bioEvolve = if rec.bioEvolve ~= nil then rec.bioEvolve else T.bioEvolve
+    o.count, o.size, o.back, o.belly = rec.count, rec.size * T.fishSize, rec.back, rec.belly
+    o.spin, o.radius, o.exciteSpin, o.scatterPush = T.fishSpin, T.fishRadius, T.fishExcite, T.fishScatter
+    o.padX, o.padY = rec.padX or T.fishPadX, rec.padY or T.fishPadY
+    o.colGap, o.rowGap = rec.colGap or T.pipColGap, rec.rowGap or T.pipRowGap
+    -- `or` is wrong for a signed override: a row that means 0 would fall
+    -- straight back to the tuner's number. These read the cell's presence.
+    o.drop = if rec.drop ~= nil then rec.drop else T.pipDrop
+    o.rotate = if rec.rotate ~= nil then rec.rotate else T.pipRotate
+    o.rotateVary = if rec.rotateVary ~= nil then rec.rotateVary else T.pipRotateVary
+    o.yaw = if rec.yaw ~= nil then rec.yaw else T.pipYaw
+    o.roll = if rec.roll ~= nil then rec.roll else T.pipRoll
+    o.sway = if rec.sway ~= nil then rec.sway else T.pipSway
+    -- The court's creature holds still; an ace's apex predator still
+    -- loops — unless the row says otherwise (`loop`).
+    o.holds = if rec.loop ~= nil then rec.loop < 0.5 else rec.rank >= 11
+    o.swirlHold, o.swirlIn, o.swirlOut = T.swirlHold, T.swirlIn, T.swirlOut
+    o.slosh, o.spring, o.damp, o.bounce = T.fishSlosh, T.fishSpring, T.fishDamp, T.fishBounce
+    o.turn, o.turnMax = T.fishTurn, math.rad(T.fishTurnMax)
+    o.hitSpeed, o.hitGap = T.fishHitSpeed, T.fishHitGap
+    o.dentAmount, o.dentFreq, o.dentDamp = T.dentAmount, T.dentFreq, T.dentDamp
+    o.bubbleCount, o.bubbleSize = T.tankBubbles, T.tankBubbleSize
+    o.bubbleRise, o.bubbleLife, o.bubbleSpread = T.tankBubbleRise, T.tankBubbleLife, T.tankBubbleSpread
+    o.loosen, o.still, o.settle, o.friction, o.gravity, o.tumble = T.rattleLoosen, T.rattleStill, T.rattleSettle, T.rattleFriction, T.rattleGravity, T.rattleTumble
+    o.walls = WALLS
+    return o
 end
 
 -- ---------------------------------------------------------------------------
@@ -4612,11 +4619,20 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
     -- One pipeline per water mode, all fed the same uniform buffer: the
     -- shaders share vortex.wgsl's layout so the table drives any of them
     -- alike. A mode whose shader is missing draws the vortex instead.
-    self.waterBytes = buffer.create(48 + 16 * 16)
-    self.waterUbo = GPUBuffer.new({ size = 48 + 16 * 16, usage = 'uniform', label = 'water ubo' })
-    self.waterPipes = {}
-    self.waterBinds = {}
-    for m, name in ipairs(WATER_MODES) do
+    --
+    -- PIPELINES, UNIFORM BUFFERS AND SAMPLERS ARE BUILT ONCE. None of them
+    -- depends on the pixel size, and this function runs again on every resize
+    -- — a phone rotation, a window drag — where recompiling seven pipelines is
+    -- the hitch. Only the canvases, and the bind groups that name their views,
+    -- are rebuilt.
+    local once = self.waterUbo == nil
+    if once then
+        self.waterBytes = buffer.create(48 + 16 * 16)
+        self.waterUbo = GPUBuffer.new({ size = 48 + 16 * 16, usage = 'uniform', label = 'water ubo' })
+        self.waterPipes = {}
+        self.waterBinds = {}
+    end
+    for m, name in ipairs(if once then WATER_MODES else {}) do
         local shader = context:shader(name)
         if shader ~= nil then
             local pipe = GPUPipeline.new({
@@ -4638,7 +4654,7 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
     local gh = math.max(1, math.floor(ph / 2))
     self.gooCanvas = context:gpuCanvas({ width = gw, height = gh })
     local gooCanvas = self.gooCanvas :: GPUCanvas
-    local gooShader = context:shader('goo')
+    local gooShader = if once then context:shader('goo') else nil
     if gooShader ~= nil then
         self.gooPipe = GPUPipeline.new({
             vertex = gooShader, fragment = gooShader, vertexLayout = {},
@@ -4647,6 +4663,8 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
         self.gooBytes = buffer.create(PUDDLE.UBO_SIZE)
         self.gooUbo = GPUBuffer.new({ size = PUDDLE.UBO_SIZE, usage = 'uniform', label = 'goo ubo' })
         self.gooSampler = GPUSampler.new({ min = 'linear', mag = 'linear', wrapU = 'clamp-to-edge', wrapV = 'clamp-to-edge' })
+    end
+    if self.gooPipe ~= nil then
         self.gooBind = GPUBindGroup.new({
             layout = (self.gooPipe :: GPUPipeline):getBindGroupLayout(0),
             ubos = { { slot = 0, buffer = self.gooUbo :: GPUBuffer } },
@@ -4663,18 +4681,23 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
     self.foamParity = 0
     local foamA = self.foamA :: GPUCanvas
     local foamB = self.foamB :: GPUCanvas
-    local foamShader = context:shader('foam')
+    local foamShader = if once then context:shader('foam') else nil
     if foamShader ~= nil and self.gooSampler ~= nil then
         self.foamPipe = GPUPipeline.new({
             vertex = foamShader, fragment = foamShader, vertexLayout = {},
             colorTargets = { { format = foamA.format } }, label = 'foam',
         })
         self.foamBytes = buffer.create(PUDDLE.FOAM_UBO_SIZE)
-        local layout = (self.foamPipe :: GPUPipeline):getBindGroupLayout(0)
-        self.foamUbos, self.foamBindsA, self.foamBindsB = {}, {}, {}
+        self.foamUbos = {}
         for k = 1, FOAM_STEPS do
-            local ubo = GPUBuffer.new({ size = PUDDLE.FOAM_UBO_SIZE, usage = 'uniform', label = `foam ubo {k}` })
-            self.foamUbos[k] = ubo
+            self.foamUbos[k] = GPUBuffer.new({ size = PUDDLE.FOAM_UBO_SIZE, usage = 'uniform', label = `foam ubo {k}` })
+        end
+    end
+    if self.foamPipe ~= nil then
+        local layout = (self.foamPipe :: GPUPipeline):getBindGroupLayout(0)
+        self.foamBindsA, self.foamBindsB = {}, {}
+        for k = 1, FOAM_STEPS do
+            local ubo = self.foamUbos[k]
             self.foamBindsA[k] = GPUBindGroup.new({
                 layout = layout,
                 ubos = { { slot = 0, buffer = ubo } },
@@ -4694,7 +4717,7 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
     -- samples as its water from here on. One bind group per foam parity.
     self.surfaceCanvas = context:gpuCanvas({ width = pw, height = ph })
     local surfaceCanvas = self.surfaceCanvas :: GPUCanvas
-    local surfaceShader = context:shader('surface')
+    local surfaceShader = if once then context:shader('surface') else nil
     if surfaceShader ~= nil and self.gooSampler ~= nil then
         self.surfacePipe = GPUPipeline.new({
             vertex = surfaceShader, fragment = surfaceShader, vertexLayout = {},
@@ -4702,6 +4725,8 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
         })
         self.surfaceBytes = buffer.create(112 + 16 * 16)
         self.surfaceUbo = GPUBuffer.new({ size = 112 + 16 * 16, usage = 'uniform', label = 'surface ubo' })
+    end
+    if self.surfacePipe ~= nil then
         local layout = (self.surfacePipe :: GPUPipeline):getBindGroupLayout(0)
         self.surfaceBind = GPUBindGroup.new({
             layout = layout,
@@ -4770,8 +4795,8 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
         self.fishReady = loadFish(self, context)
     end
 
-    local crt = context:shader('crt')
-    if crt ~= nil and maskImg ~= nil and inkImg ~= nil then
+    local crt = if once then context:shader('crt') else nil
+    if crt ~= nil then
         self.crtPipe = GPUPipeline.new({
             vertex = crt, fragment = crt, vertexLayout = {},
             colorTargets = { { format = screen.format } }, label = 'crt',
@@ -4784,6 +4809,8 @@ local function buildGpu(self: Table, context: Context, pw: number, ph: number)
         -- misses by a pixel or two — which is the pale line the old cream
         -- plate used to show around every card.
         self.crtPoint = GPUSampler.new({ min = 'nearest', mag = 'nearest', wrapU = 'clamp-to-edge', wrapV = 'clamp-to-edge' })
+    end
+    if self.crtPipe ~= nil and maskImg ~= nil and inkImg ~= nil then
         local scene = self.scene :: Canvas
         local img = scene.image
         if img ~= nil then
@@ -6001,6 +6028,11 @@ local function drawFoam(self: Table)
     end
     local elapsed = if self.foamTime < 0 then 1 / 60 else math.max(0, self.time - self.foamTime)
     self.foamTime = self.time
+    -- A SLOW FRAME MUST NOT BUY THE NEXT ONE MORE WORK: at eight catch-up
+    -- steps a hitch paid for itself twice. Past FOAM_CATCHUP steps the foam
+    -- simply loses the time (it fades a touch less that frame), which nobody
+    -- can see, and each step keeps its 1/40s so the sim stays stable.
+    elapsed = math.min(elapsed, FOAM_CATCHUP / 40)
     local steps = clamp(math.ceil(elapsed * 40), 1, FOAM_STEPS)
     local dt = elapsed / steps
     local p = self.puppet
@@ -6610,9 +6642,15 @@ end
 -- every time, and this runs per card per frame. A runtime without it draws
 -- the shadows and the bubbles at full strength, which is wrong and visible,
 -- and still a table you can play.
+--
+-- Once the probe has passed, the call is direct: a pcall wraps a closure, and
+-- a closure per shadow and per bubble is a few hundred a frame of garbage.
 local canModulate: boolean? = nil
 local function modulate(r: Renderer, alpha: number)
-    if canModulate == false then
+    if canModulate == true then
+        r:modulateOpacity(alpha)
+        return
+    elseif canModulate == false then
         return
     end
     local ok = pcall(function()

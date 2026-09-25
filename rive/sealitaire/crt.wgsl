@@ -154,6 +154,16 @@ fn rimShade(mode: i32, d: f32, lp: vec2f, half: vec2f, r: f32, rot: vec2f,
             uv: vec2f, t: f32, energy: f32, w: f32) -> vec4f {
     // Across the band: 0 at the card's outline, 1 where it meets the face.
     let x = clamp(-d / max(w, 0.5), 0.0, 1.0);
+    // OFF THE BAND THERE IS NOTHING TO SHADE, and that is nearly every pixel
+    // on the screen: the water, and the faces inside the bevel. Coverage below
+    // is zero outside the outline's pixel of antialiasing and past x = 1, so
+    // leave before the eight water reads. Legal only because every read below
+    // is textureSampleLevel — an explicit LOD needs no derivatives, so it may
+    // sit in non-uniform control flow where textureSample may not. The canvases
+    // have one mip, so level 0 is exactly what textureSample read.
+    if (d >= 0.6 || x >= 1.0) {
+        return vec4f(0.0);
+    }
     let a = x * 1.5707964;
     let g = sdCardGrad(lp, half, r);
     let gs = vec2f(g.x * rot.x - g.y * rot.y, g.x * rot.y + g.y * rot.x);
@@ -171,26 +181,10 @@ fn rimShade(mode: i32, d: f32, lp: vec2f, half: vec2f, r: f32, rot: vec2f,
     // repeating identically on all four sides.
     let ang = atan2(lp.y, lp.x);
 
-    // Every mode's texture reads happen for every mode: a sample inside an if
-    // is non-uniform control flow and WebGPU rejects it.
+    // The water reads each happen only in the mode that uses them — reflective
+    // one, refractive three, chrome five. Explicit-LOD reads, so they may sit
+    // inside the branches (see the early return above).
     let rd = reflect(vec3f(0.0, 0.0, -1.0), n);
-    let env = textureSample(water, samp, clamp(uv + rd.xy * 0.22, vec2f(0.002), vec2f(0.998))).rgb;
-    let off = gs * (w * 3.4) * (1.0 - x) / u.a.xy;
-    let b0 = textureSample(water, samp, clamp(uv + off * 1.18, vec2f(0.002), vec2f(0.998))).r;
-    let b1 = textureSample(water, samp, clamp(uv + off, vec2f(0.002), vec2f(0.998))).g;
-    let b2 = textureSample(water, samp, clamp(uv + off * 0.84, vec2f(0.002), vec2f(0.998))).b;
-
-    // Chrome's mirror: the water round the card, blurred along the band's
-    // tangent so the reflection streaks the way a brushed finish smears it.
-    // Read here, unconditionally, for the same reason as the taps above.
-    let tg = vec2f(-gs.y, gs.x) / u.a.xy;
-    let rc = clamp(uv + rd.xy * 0.16, vec2f(0.002), vec2f(0.998));
-    let sm = w * 2.0;
-    let mir = (textureSample(water, samp, rc).rgb
-             + textureSample(water, samp, clamp(rc + tg * sm, vec2f(0.002), vec2f(0.998))).rgb
-             + textureSample(water, samp, clamp(rc - tg * sm, vec2f(0.002), vec2f(0.998))).rgb
-             + textureSample(water, samp, clamp(rc + tg * sm * 2.2, vec2f(0.002), vec2f(0.998))).rgb
-             + textureSample(water, samp, clamp(rc - tg * sm * 2.2, vec2f(0.002), vec2f(0.998))).rgb) * 0.2;
 
     let deep = vec3f(0.04, 0.13, 0.21);
     let pale = vec3f(0.80, 0.93, 0.96);
@@ -214,6 +208,7 @@ fn rimShade(mode: i32, d: f32, lp: vec2f, half: vec2f, r: f32, rot: vec2f,
         // Reflective: the table itself, mirrored off the bevel, darkened
         // where the bevel faces the viewer so the mirror reads as curved
         // metal rather than as a pane laid flat over the card's edge.
+        let env = textureSampleLevel(water, samp, clamp(uv + rd.xy * 0.22, vec2f(0.002), vec2f(0.998)), 0.0).rgb;
         col = env * (0.55 + 1.15 * fres) + pale * spec * 1.2;
         col += vec3f(0.50, 0.80, 0.90) * fres * 0.30;
     } else if (mode == 4) {
@@ -221,6 +216,10 @@ fn rimShade(mode: i32, d: f32, lp: vec2f, half: vec2f, r: f32, rot: vec2f,
         // split per channel, with the two lines a glass edge actually shows —
         // the bright catch right on the outline, and the caustic where the
         // bevel flattens off into the face.
+        let off = gs * (w * 3.4) * (1.0 - x) / u.a.xy;
+        let b0 = textureSampleLevel(water, samp, clamp(uv + off * 1.18, vec2f(0.002), vec2f(0.998)), 0.0).r;
+        let b1 = textureSampleLevel(water, samp, clamp(uv + off, vec2f(0.002), vec2f(0.998)), 0.0).g;
+        let b2 = textureSampleLevel(water, samp, clamp(uv + off * 0.84, vec2f(0.002), vec2f(0.998)), 0.0).b;
         col = vec3f(b0, b1, b2) * (1.15 + 0.85 * fres);
         col += pale * pow(1.0 - x, 7.0) * 0.55;
         col += pale * pow(x, 5.0) * 0.45;
@@ -251,6 +250,16 @@ fn rimShade(mode: i32, d: f32, lp: vec2f, half: vec2f, r: f32, rot: vec2f,
         //   a grazing sheen at the two edges (`fres`), the wire's own rim.
         // The face-side edge ends in a dark seam, which is what a bezel
         // shows where it meets the plate — the markup draws that line too.
+        // Chrome's mirror: the water round the card, blurred along the band's
+        // tangent so the reflection streaks the way a brushed finish smears it.
+        let tg = vec2f(-gs.y, gs.x) / u.a.xy;
+        let rc = clamp(uv + rd.xy * 0.16, vec2f(0.002), vec2f(0.998));
+        let sm = w * 2.0;
+        let mir = (textureSampleLevel(water, samp, rc, 0.0).rgb
+                 + textureSampleLevel(water, samp, clamp(rc + tg * sm, vec2f(0.002), vec2f(0.998)), 0.0).rgb
+                 + textureSampleLevel(water, samp, clamp(rc - tg * sm, vec2f(0.002), vec2f(0.998)), 0.0).rgb
+                 + textureSampleLevel(water, samp, clamp(rc + tg * sm * 2.2, vec2f(0.002), vec2f(0.998)), 0.0).rgb
+                 + textureSampleLevel(water, samp, clamp(rc - tg * sm * 2.2, vec2f(0.002), vec2f(0.998)), 0.0).rgb) * 0.2;
         let wn = vec3f(gs * cos(x * 3.1415927), sin(x * 3.1415927));
         let ndlw = max(dot(wn, l), 0.0);
         // The metal's numbers are the tuner's: tint, body, grain (strength and
@@ -422,12 +431,21 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     // return around one).
     let inside = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
 
-    // Chromatic split radially from the centre, stronger at the edges.
-    let dir = (uv - 0.5) * aber;
-    let r = layer(uv + dir).r;
-    let g = layer(uv).g;
-    let b = layer(uv - dir).b;
-    var col = vec3f(r, g, b);
+    // Chromatic split radially from the centre, stronger at the edges. Three
+    // whole composites a pixel, one per channel — so when the tuner has the
+    // split at zero (its default) it is ONE: the three would be identical.
+    // `aberration` is a uniform, so this branch is uniform control flow and
+    // the textureSamples inside layer() stay legal.
+    var col: vec3f;
+    if (u.b.z == 0.0) {
+        col = layer(uv);
+    } else {
+        let dir = (uv - 0.5) * aber;
+        let r = layer(uv + dir).r;
+        let g = layer(uv).g;
+        let b = layer(uv - dir).b;
+        col = vec3f(r, g, b);
+    }
 
     // Scanlines and a subtle shadow mask.
     let line = 0.5 + 0.5 * sin(uv.y * res.y * 3.14159 * 1.0 + t * 0.5);

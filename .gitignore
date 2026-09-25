@@ -79,3 +79,9 @@ release
 rive/sealitaire/build/
 # Wetris (rive/wetris): the same, for the third project.
 rive/wetris/build/
+
+# What the workbench's Dock button (`npm run hub:app`) tees the panel's own
+# session into — truncated per launch, so it only ever answers "what happened
+# just now". The same idea as each game's build/app.log, in the one place that
+# belongs to a tool rather than to a project.
+tools/build/

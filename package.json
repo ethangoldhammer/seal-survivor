@@ -15,6 +15,7 @@
     "csv": "node --import ./tools/vite-loader.mjs tools/csv-editor.mjs",
     "servers": "node tools/servers.mjs",
     "hub": "node tools/hub.mjs",
+    "hub:app": "node tools/hub-app.mjs",
     "rive": "$HOME/.rive/bin/rive rive/blubberball --once && cp rive/blubberball/build/blubberball.riv path/src/ui/blubberball.riv",
     "rive:watch": "$HOME/.rive/bin/rive rive/blubberball",
     "rive:rev": "$HOME/.rive/bin/rive rive/blubberball --once --rev=rive/blubberball/build/blubberball.rev",

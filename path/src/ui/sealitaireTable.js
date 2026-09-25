@@ -76,6 +76,31 @@ const RIV_URL = assetUrl('/sealitaire.riv');
 
 let mounted = null;
 
+// ---------------------------------------------------------------------------
+// THE PIXEL RATIO IS CAPPED. The table is about eight full-screen shader passes
+// a frame (water, surface, seal x2, mask, scene, CRT, plus the half-size goo and
+// foam), every one of them sized in DEVICE pixels — table.luau's resize builds
+// them at layout size x this ratio. A 3x phone is 2.25x the pixels of 2x for a
+// difference nobody can see at arm's length, and a fullscreen 5K window is 14M
+// pixels a pass. So: never more than 2, and never more than PIXEL_BUDGET device
+// pixels, whichever is lower. An ordinary retina laptop sits under both and
+// renders exactly as before.
+const MAX_DPR = 2;
+const PIXEL_BUDGET = 3840 * 2160;
+function tableDpr(canvas) {
+  const want = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+  const { width, height } = canvas.getBoundingClientRect();
+  const area = width * height;
+  if (!area) return want;
+  return Math.max(1, Math.min(want, Math.sqrt(PIXEL_BUDGET / area)));
+}
+
+// A RESIZE REBUILDS EVERY GPU CANVAS in table.luau, so a window drag or a phone
+// rotation must not fire one per event. Until it settles the browser stretches
+// the last frame to the new box, which is clean — the layout and the canvases
+// stay in step, just at the old size for a moment.
+const RESIZE_SETTLE_MS = 150;
+
 /**
  * Is the table available in this build? False when the .riv was never
  * shipped — a dev tree that has not run `npm run sealitaire:ship`. The menu
@@ -172,7 +197,7 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
     layout: new Layout({ fit: Fit.Layout, alignment: Alignment.Center }),
     onLoad: () => {
       loading.remove();
-      rive.resizeDrawingSurfaceToCanvas();
+      rive.resizeDrawingSurfaceToCanvas(tableDpr(canvas));
       // Focused on arrival, so the shortcuts work without a click first, and
       // refocused on every press: clicking a card must not hand focus back to
       // whatever the menu left it on.
@@ -182,10 +207,16 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
 
   canvas.addEventListener('pointerdown', () => canvas.focus());
 
-  const onResize = () => rive.resizeDrawingSurfaceToCanvas();
+  let settle = 0;
+  const onResize = () => {
+    clearTimeout(settle);
+    settle = setTimeout(() => {
+      if (mounted?.rive === rive) rive.resizeDrawingSurfaceToCanvas(tableDpr(canvas));
+    }, RESIZE_SETTLE_MS);
+  };
   window.addEventListener('resize', onResize);
 
-  mounted = { wrap, rive, onResize, onKey, canvas };
+  mounted = { wrap, rive, onResize, onKey, canvas, cancelSettle: () => clearTimeout(settle) };
   return mounted;
 }
 
@@ -274,8 +305,9 @@ async function fetchRiv(onProgress) {
  */
 export function hideSealitaire() {
   if (!mounted) return;
-  const { wrap, rive, onResize, onKey } = mounted;
+  const { wrap, rive, onResize, onKey, cancelSettle } = mounted;
   mounted = null;
+  cancelSettle();
   window.removeEventListener('resize', onResize);
   window.removeEventListener('keydown', onKey, true);
   try { rive.cleanup(); } catch { /* already gone */ }

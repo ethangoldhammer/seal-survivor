@@ -46,6 +46,13 @@
 /sprites/*
   cache-control: public, max-age=86400, stale-while-revalidate=604800
 
+# Sealitaire's whole program, ~22 MB, fetched each time the table opens. Same
+# policy as the media: a new .riv is self-contained (every script, shader and
+# sound is inside it), so a stale one for a load is an older table, never a
+# broken one.
+/sealitaire.riv
+  cache-control: public, max-age=86400, stale-while-revalidate=604800
+
 # index.html is deliberately absent: it must stay on the default
 # revalidate-every-time policy, or a deploy would not reach anyone who had
 # loaded the game before. It is the one file that points at all the hashed
