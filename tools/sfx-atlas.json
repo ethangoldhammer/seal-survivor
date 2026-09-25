@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-09-18T01:48:55.278Z",
+  "generatedAt": "2026-09-25T05:56:50.818Z",
   "counts": {
-    "sounds": 198,
+    "sounds": 199,
     "sampled": 115,
-    "synth": 83,
-    "events": 254,
-    "eventsWithSound": 234,
-    "silentEvents": 20,
-    "callSites": 257,
+    "synth": 84,
+    "events": 266,
+    "eventsWithSound": 243,
+    "silentEvents": 23,
+    "callSites": 268,
     "files": 251,
     "orphanFiles": 43,
     "unreferencedSounds": 11
@@ -1698,10 +1698,11 @@
         "detune": 0
       },
       "firedBy": [
-        "hotSpotHit"
+        "hotSpotHit",
+        "sealFlipWallHit"
       ],
       "directSites": [],
-      "minGap": 0.07,
+      "minGap": 0.06,
       "orphaned": false
     },
     {
@@ -2347,8 +2348,8 @@
         {
           "path": "/sfx/HG_SF_FX_beboplex_2.mp3",
           "exists": true,
-          "bytes": 73869,
-          "seconds": 2.088
+          "bytes": 26018,
+          "seconds": 2.142083
         },
         {
           "path": "/sfx/EG_Mouthwindfall.mp3",
@@ -2395,8 +2396,8 @@
         {
           "path": "/sfx/HG_SF_FX_Arp2600_SpringShot_3.mp3",
           "exists": true,
-          "bytes": 27018,
-          "seconds": 0.624
+          "bytes": 8463,
+          "seconds": 0.679167
         },
         {
           "path": "/sfx/ESM_HG_Cinematic_FX_creature_werewolf_eerie_howl_01.mp3",
@@ -2477,7 +2478,9 @@
       },
       "firedBy": [
         "crewHit",
-        "boatTurn"
+        "boatTurn",
+        "sealFlipSlap",
+        "sealFlipWall"
       ],
       "directSites": [],
       "minGap": 0.1,
@@ -2540,8 +2543,8 @@
         {
           "path": "/sfx/fluteseal_01.mp3",
           "exists": true,
-          "bytes": 27840,
-          "seconds": 0.696
+          "bytes": 9404,
+          "seconds": 0.757583
         },
         {
           "path": "/sfx/EliDadSeal_48.mp3",
@@ -2743,14 +2746,14 @@
         {
           "path": "/sfx/HG_UI_Ball_Bink.mp3",
           "exists": true,
-          "bytes": 6268,
-          "seconds": 0.1567
+          "bytes": 2821,
+          "seconds": 0.209
         },
         {
           "path": "/sfx/HG_UI_Blip_Menu_Bic.mp3",
           "exists": true,
-          "bytes": 12537,
-          "seconds": 0.313425
+          "bytes": 4702,
+          "seconds": 0.36575
         }
       ],
       "missing": [],
@@ -2784,20 +2787,20 @@
         {
           "path": "/sfx/HGUI_Organ_Gyro.mp3",
           "exists": true,
-          "bytes": 26121,
-          "seconds": 0.653025
+          "bytes": 8777,
+          "seconds": 0.705333
         },
         {
           "path": "/sfx/HG_SF_FX_Arp2600_SpringShot_3.mp3",
           "exists": true,
-          "bytes": 27018,
-          "seconds": 0.624
+          "bytes": 8463,
+          "seconds": 0.679167
         },
         {
           "path": "/sfx/Juno60_blips_050.mp3",
           "exists": true,
-          "bytes": 28211,
-          "seconds": 0.705275
+          "bytes": 9404,
+          "seconds": 0.757583
         }
       ],
       "missing": [],
@@ -2828,14 +2831,14 @@
         {
           "path": "/sfx/Pilea_059.mp3",
           "exists": true,
-          "bytes": 56423,
-          "seconds": 1.410575
+          "bytes": 17867,
+          "seconds": 1.462833
         },
         {
           "path": "/sfx/Juno60_blips_043.mp3",
           "exists": true,
-          "bytes": 39705,
-          "seconds": 0.992625
+          "bytes": 12852,
+          "seconds": 1.044917
         }
       ],
       "missing": [],
@@ -3043,8 +3046,8 @@
         {
           "path": "/sfx/HGUI_Organ_Shark.mp3",
           "exists": true,
-          "bytes": 10448,
-          "seconds": 0.2612
+          "bytes": 4075,
+          "seconds": 0.3135
         },
         {
           "path": "/sfx/EG_FlickPlop_13.mp3",
@@ -3324,8 +3327,8 @@
         {
           "path": "/sfx/HG_FLY_Breath_Jers.mp3",
           "exists": true,
-          "bytes": 38541,
-          "seconds": 0.984
+          "bytes": 12852,
+          "seconds": 1.044917
         },
         {
           "path": "/sfx/EG_Inhale_01.mp3",
@@ -3900,6 +3903,31 @@
       "orphaned": false
     },
     {
+      "name": "versusOvation",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 3000,
+        "noise": 0.9,
+        "decay": 1.5,
+        "gain": 0.3,
+        "pitchVary": 0.05,
+        "filterVary": 0.18,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusGoalLineClear"
+      ],
+      "directSites": [],
+      "minGap": 0.5,
+      "orphaned": false
+    },
+    {
       "name": "versusPost",
       "mode": "synth",
       "files": [],
@@ -3986,7 +4014,9 @@
         "detune": 0
       },
       "firedBy": [
-        "versusBallHit"
+        "sealFlipImpact",
+        "versusBallHit",
+        "versusFlipSlap"
       ],
       "directSites": [],
       "minGap": 0.05,
@@ -4056,7 +4086,8 @@
         "detune": 0
       },
       "firedBy": [
-        "versusBallTap"
+        "versusBallTap",
+        "versusFlipWall"
       ],
       "directSites": [],
       "minGap": 0.05,
@@ -4230,10 +4261,12 @@
         "detune": 0
       },
       "firedBy": [
+        "sealFlip",
+        "sealFlipRocket",
         "versusFinSwipe"
       ],
       "directSites": [],
-      "minGap": 0.1,
+      "minGap": 0,
       "orphaned": false
     },
     {
@@ -4595,8 +4628,8 @@
         {
           "path": "/sfx/Juno60_blips_047.mp3",
           "exists": true,
-          "bytes": 20897,
-          "seconds": 0.522425
+          "bytes": 7209,
+          "seconds": 0.574667
         }
       ],
       "missing": [],
@@ -5194,8 +5227,8 @@
         {
           "path": "/sfx/Magic1.mp3",
           "exists": true,
-          "bytes": 89860,
-          "seconds": 2.2465
+          "bytes": 27898,
+          "seconds": 2.29875
         }
       ],
       "missing": [],
@@ -5822,8 +5855,8 @@
         {
           "path": "/sfx/HG_UI_Blip_Menu_Blockhead.mp3",
           "exists": true,
-          "bytes": 10448,
-          "seconds": 0.2612
+          "bytes": 4075,
+          "seconds": 0.3135
         },
         {
           "path": "/sfx/HG_UI_Blip_Menu_Blicky-converted.mp3",
@@ -5875,8 +5908,8 @@
         {
           "path": "/sfx/HG_SF_FX_beboplex_2.mp3",
           "exists": true,
-          "bytes": 73869,
-          "seconds": 2.088
+          "bytes": 26018,
+          "seconds": 2.142083
         },
         {
           "path": "/sfx/ESM_Fast_Mechanical_Computer_Program_Particle_Sci_Fi_Abstract_Loading_Particle_Military.mp3",
@@ -6210,8 +6243,8 @@
         {
           "path": "/sfx/fluteseal_01.mp3",
           "exists": true,
-          "bytes": 27840,
-          "seconds": 0.696
+          "bytes": 9404,
+          "seconds": 0.757583
         },
         {
           "path": "/sfx/Seal_21.mp3",
@@ -6248,8 +6281,8 @@
         {
           "path": "/sfx/HG_UI_Blip_Menu_Plankton.mp3",
           "exists": true,
-          "bytes": 12537,
-          "seconds": 0.313425
+          "bytes": 4702,
+          "seconds": 0.36575
         }
       ],
       "missing": [],
@@ -7122,7 +7155,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6742
+          "line": 7505
         }
       ]
     },
@@ -7157,7 +7190,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6244
+          "line": 7007
         }
       ]
     },
@@ -7334,15 +7367,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4005
+          "line": 4463
         },
         {
           "file": "path/src/main.js",
-          "line": 8753
+          "line": 9580
         },
         {
           "file": "path/src/main.js",
-          "line": 8757
+          "line": 9584
         }
       ]
     },
@@ -7359,7 +7392,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8822
+          "line": 9649
         }
       ]
     },
@@ -7379,7 +7412,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3032
+          "line": 3490
         }
       ]
     },
@@ -7444,7 +7477,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5767
+          "line": 6530
         }
       ]
     },
@@ -7461,7 +7494,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5768
+          "line": 6531
         }
       ]
     },
@@ -7577,7 +7610,7 @@
       "sites": [
         {
           "file": "path/src/entities/enemies.js",
-          "line": 4823
+          "line": 4842
         }
       ]
     },
@@ -7751,7 +7784,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3133
+          "line": 3591
         }
       ]
     },
@@ -7771,7 +7804,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8681
+          "line": 9499
         }
       ]
     },
@@ -7851,11 +7884,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9514
+          "line": 10341
         },
         {
           "file": "path/src/main.js",
-          "line": 9913
+          "line": 10751
         }
       ]
     },
@@ -7875,7 +7908,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9526
+          "line": 10353
         }
       ]
     },
@@ -7895,7 +7928,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5747
+          "line": 6510
         }
       ]
     },
@@ -7915,11 +7948,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8671
+          "line": 9489
         },
         {
           "file": "path/src/main.js",
-          "line": 9882
+          "line": 10720
         }
       ]
     },
@@ -7936,11 +7969,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8676
+          "line": 9494
         },
         {
           "file": "path/src/main.js",
-          "line": 9884
+          "line": 10722
         }
       ]
     },
@@ -7960,7 +7993,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3300
+          "line": 3758
         }
       ]
     },
@@ -7980,7 +8013,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4747
+          "line": 4856
         }
       ]
     },
@@ -8000,7 +8033,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4804
+          "line": 4913
         }
       ]
     },
@@ -8017,7 +8050,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 5542
+          "line": 5651
         }
       ]
     },
@@ -8097,7 +8130,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4796
+          "line": 4905
         }
       ]
     },
@@ -8117,7 +8150,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 6071
+          "line": 6180
         }
       ]
     },
@@ -8134,7 +8167,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3671
+          "line": 4129
         }
       ]
     },
@@ -8154,7 +8187,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4984
+          "line": 5093
         }
       ]
     },
@@ -8245,7 +8278,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6803
+          "line": 7566
         }
       ]
     },
@@ -8317,59 +8350,51 @@
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 402
+          "line": 444
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 463
+          "line": 509
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 475
+          "line": 521
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 537
+          "line": 583
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 707
+          "line": 753
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 740
+          "line": 786
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 717
+          "line": 830
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 884
-        },
-        {
-          "file": "path/src/ui/teamSelect.js",
-          "line": 921
-        },
-        {
-          "file": "path/src/ui/teamSelect.js",
-          "line": 939
+          "line": 1022
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 152
+          "line": 158
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3179
+          "line": 3213
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6382
+          "line": 6491
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6533
+          "line": 6642
         }
       ]
     },
@@ -8402,123 +8427,123 @@
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 404
+          "line": 446
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 466
+          "line": 512
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 477
+          "line": 523
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 660
+          "line": 706
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 698
+          "line": 744
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 759
+          "line": 805
         },
         {
           "file": "path/src/ui/roomLobby.js",
-          "line": 225
+          "line": 231
         },
         {
           "file": "path/src/ui/roomLobby.js",
-          "line": 255
+          "line": 261
         },
         {
           "file": "path/src/ui/roomLobby.js",
-          "line": 277
+          "line": 283
         },
         {
           "file": "path/src/ui/roomLobby.js",
-          "line": 293
+          "line": 299
         },
         {
           "file": "path/src/ui/roomLobby.js",
-          "line": 298
+          "line": 304
         },
         {
           "file": "path/src/ui/roomLobby.js",
-          "line": 309
+          "line": 318
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 650
+          "line": 757
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 724
+          "line": 837
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 809
+          "line": 922
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 822
+          "line": 935
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 825
+          "line": 938
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 833
+          "line": 946
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 953
+          "line": 1036
         },
         {
           "file": "path/src/ui/teamSelect.js",
-          "line": 967
-        },
-        {
-          "file": "path/src/ui/teamSelect.js",
-          "line": 975
-        },
-        {
-          "file": "path/src/ui/teamSelect.js",
-          "line": 1112
+          "line": 1131
         },
         {
           "file": "path/src/ui/teamSelect.js",
           "line": 1144
         },
         {
-          "file": "path/src/ui/ui.js",
-          "line": 153
+          "file": "path/src/ui/teamSelect.js",
+          "line": 1309
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 1341
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3161
+          "line": 159
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3170
+          "line": 3195
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3180
+          "line": 3204
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3819
+          "line": 3214
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6313
+          "line": 3928
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6566
+          "line": 6422
+        },
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 6675
         }
       ]
     },
@@ -8552,7 +8577,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3324
+          "line": 3358
         }
       ]
     },
@@ -8569,7 +8594,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3491
+          "line": 3525
         }
       ]
     },
@@ -8586,7 +8611,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3492
+          "line": 3526
         }
       ]
     },
@@ -8606,19 +8631,19 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9080
+          "line": 9907
         },
         {
           "file": "path/src/main.js",
-          "line": 9468
+          "line": 10295
         },
         {
           "file": "path/src/main.js",
-          "line": 9539
+          "line": 10366
         },
         {
           "file": "path/src/main.js",
-          "line": 9917
+          "line": 10755
         }
       ]
     },
@@ -8635,7 +8660,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9490
+          "line": 10317
         }
       ]
     },
@@ -8652,7 +8677,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5401
+          "line": 5859
         }
       ]
     },
@@ -8669,7 +8694,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3652
+          "line": 4110
         }
       ]
     },
@@ -8689,11 +8714,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8760
+          "line": 9587
         },
         {
           "file": "path/src/main.js",
-          "line": 9505
+          "line": 10332
         }
       ]
     },
@@ -8733,15 +8758,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4226
+          "line": 4684
         },
         {
           "file": "path/src/main.js",
-          "line": 8758
+          "line": 9585
         },
         {
           "file": "path/src/main.js",
-          "line": 9418
+          "line": 10245
         }
       ]
     },
@@ -8798,7 +8823,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8511
+          "line": 9320
         }
       ]
     },
@@ -9298,7 +9323,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9294
+          "line": 10121
         }
       ]
     },
@@ -9316,6 +9341,10 @@
       },
       "haptic": "12ms @ 0.72",
       "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 6324
+        },
         {
           "file": "path/src/systems/bossHotSpots.js",
           "line": 2162
@@ -9375,7 +9404,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6875
+          "line": 7638
         }
       ]
     },
@@ -9392,7 +9421,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6927
+          "line": 7690
         }
       ]
     },
@@ -9412,7 +9441,7 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 1989
+          "line": 2004
         }
       ]
     },
@@ -9432,7 +9461,7 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 2008
+          "line": 2023
         }
       ]
     },
@@ -9457,6 +9486,150 @@
       ]
     },
     {
+      "name": "sealFlip",
+      "sfx": "versusFinSwipe",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.1,
+      "ripple": {
+        "strength": 0.6,
+        "radius": 4
+      },
+      "haptic": "18ms @ 0.45",
+      "sites": [
+        {
+          "file": "path/src/systems/sealFlip.js",
+          "line": 501
+        }
+      ]
+    },
+    {
+      "name": "sealFlipSlap",
+      "sfx": "splash",
+      "sfxMinGap": 0.1,
+      "emit": "finFlickWipe",
+      "shake": 0.12,
+      "hitstop": 0,
+      "glow": 0.3,
+      "ripple": {
+        "strength": 1.5,
+        "radius": 7
+      },
+      "haptic": "42ms @ 0.85",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 6249
+        }
+      ]
+    },
+    {
+      "name": "sealFlipTailBubbles",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": "tailBubbles",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.25,
+      "ripple": {
+        "strength": 0.9,
+        "radius": 5
+      },
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 6370
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2540
+        }
+      ]
+    },
+    {
+      "name": "sealFlipImpact",
+      "sfx": "versusBallHit",
+      "sfxMinGap": 0.08,
+      "emit": "ballSplash",
+      "shake": 0.55,
+      "hitstop": 0.07,
+      "glow": 0.7,
+      "ripple": {
+        "strength": 2.2,
+        "radius": 9
+      },
+      "haptic": "60ms @ 1.00",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 6355
+        }
+      ]
+    },
+    {
+      "name": "sealFlipRocket",
+      "sfx": "versusFinSwipe",
+      "sfxMinGap": 0.1,
+      "emit": "wakeBubbles",
+      "shake": 0.14,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 1.2,
+        "radius": 6
+      },
+      "haptic": "30ms @ 0.60",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 6149
+        }
+      ]
+    },
+    {
+      "name": "sealFlipWall",
+      "sfx": "splash",
+      "sfxMinGap": 0.1,
+      "emit": null,
+      "shake": 0.2,
+      "hitstop": 0,
+      "glow": 0.4,
+      "ripple": {
+        "strength": 1.8,
+        "radius": 8
+      },
+      "haptic": "34ms @ 0.70",
+      "sites": [
+        {
+          "file": "path/src/systems/gooWall.js",
+          "line": 201
+        }
+      ]
+    },
+    {
+      "name": "sealFlipWallHit",
+      "sfx": "hotSpotHit",
+      "sfxMinGap": 0.06,
+      "emit": "playerHit",
+      "shake": 0.06,
+      "hitstop": 0,
+      "glow": 0.3,
+      "ripple": {
+        "strength": 0.7,
+        "radius": 4
+      },
+      "haptic": "14ms @ 0.30",
+      "sites": [
+        {
+          "file": "path/src/systems/gooWall.js",
+          "line": 420
+        }
+      ]
+    },
+    {
       "name": "reentry",
       "sfx": "reentry",
       "sfxMinGap": 0,
@@ -9472,7 +9645,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5513
+          "line": 5971
         }
       ]
     },
@@ -9492,7 +9665,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3051
+          "line": 3509
         }
       ]
     },
@@ -9509,11 +9682,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8363
+          "line": 9172
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3215
+          "line": 3573
         }
       ]
     },
@@ -9533,7 +9706,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8412
+          "line": 9221
         }
       ]
     },
@@ -9553,7 +9726,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5266
+          "line": 5724
         }
       ]
     },
@@ -9573,7 +9746,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5267
+          "line": 5725
         }
       ]
     },
@@ -9593,15 +9766,15 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 1868
+          "line": 1883
         },
         {
           "file": "path/src/main.js",
-          "line": 8457
+          "line": 9266
         },
         {
           "file": "path/src/main.js",
-          "line": 8740
+          "line": 9567
         }
       ]
     },
@@ -9621,15 +9794,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8984
+          "line": 9811
         },
         {
           "file": "path/src/main.js",
-          "line": 9650
+          "line": 10483
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3906
+          "line": 4462
         }
       ]
     },
@@ -9649,7 +9822,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9820
+          "line": 10658
         }
       ]
     },
@@ -9666,7 +9839,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8478
+          "line": 9287
         }
       ]
     },
@@ -9756,7 +9929,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9666
+          "line": 10504
         }
       ]
     },
@@ -9776,7 +9949,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9776
+          "line": 10614
         }
       ]
     },
@@ -9796,7 +9969,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9795
+          "line": 10633
         }
       ]
     },
@@ -9861,7 +10034,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3864
+          "line": 4322
         }
       ]
     },
@@ -9881,11 +10054,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8285
+          "line": 9094
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3242
+          "line": 3600
         }
       ]
     },
@@ -9902,11 +10075,28 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8301
+          "line": 9110
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3248
+          "line": 3606
+        }
+      ]
+    },
+    {
+      "name": "boostShatter",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/systems/boostAura.js",
+          "line": 824
         }
       ]
     },
@@ -9926,7 +10116,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4933
+          "line": 5391
         }
       ]
     },
@@ -9946,7 +10136,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5386
+          "line": 5844
         }
       ]
     },
@@ -9966,7 +10156,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5677
+          "line": 6440
         }
       ]
     },
@@ -9986,15 +10176,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9324
+          "line": 10151
         },
         {
           "file": "path/src/main.js",
-          "line": 9440
+          "line": 10267
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3175
+          "line": 3533
         }
       ]
     },
@@ -10014,7 +10204,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9362
+          "line": 10189
         }
       ]
     },
@@ -10034,7 +10224,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8720
+          "line": 9547
         }
       ]
     },
@@ -10051,11 +10241,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9371
+          "line": 10198
         },
         {
           "file": "path/src/main.js",
-          "line": 9442
+          "line": 10269
         }
       ]
     },
@@ -10072,15 +10262,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8094
+          "line": 8886
         },
         {
           "file": "path/src/main.js",
-          "line": 8120
+          "line": 8912
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3320
+          "line": 3678
         }
       ]
     },
@@ -10097,11 +10287,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8150
+          "line": 8942
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3327
+          "line": 3685
         }
       ]
     },
@@ -10121,7 +10311,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5614
+          "line": 6072
         }
       ]
     },
@@ -10138,7 +10328,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9393
+          "line": 10220
         }
       ]
     },
@@ -10155,7 +10345,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 502
+          "line": 522
         }
       ]
     },
@@ -10172,7 +10362,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 10034
+          "line": 10872
         }
       ]
     },
@@ -10192,7 +10382,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4873
+          "line": 5331
         }
       ]
     },
@@ -10209,7 +10399,7 @@
       "sites": [
         {
           "file": "path/src/systems/oxygenFx.js",
-          "line": 112
+          "line": 115
         }
       ]
     },
@@ -10226,7 +10416,7 @@
       "sites": [
         {
           "file": "path/src/systems/oxygenFx.js",
-          "line": 154
+          "line": 157
         }
       ]
     },
@@ -10243,7 +10433,7 @@
       "sites": [
         {
           "file": "path/src/systems/oxygenFx.js",
-          "line": 177
+          "line": 180
         }
       ]
     },
@@ -10263,7 +10453,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8943
+          "line": 9770
         }
       ]
     },
@@ -10283,7 +10473,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8949
+          "line": 9776
         }
       ]
     },
@@ -10303,7 +10493,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8997
+          "line": 9824
         }
       ]
     },
@@ -10398,7 +10588,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 2242
+          "line": 2311
         }
       ]
     },
@@ -10418,7 +10608,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 2334
+          "line": 2686
         }
       ]
     },
@@ -10435,9 +10625,39 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3658
+          "line": 4175
         }
       ]
+    },
+    {
+      "name": "versusFlipSlap",
+      "sfx": "versusBallHit",
+      "sfxMinGap": 0.08,
+      "emit": "ballSplash",
+      "shake": 0.45,
+      "hitstop": 0.07,
+      "glow": 0.8,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 9
+      },
+      "haptic": "60ms @ 1.00",
+      "sites": []
+    },
+    {
+      "name": "versusFlipWall",
+      "sfx": "versusBallTap",
+      "sfxMinGap": 0.08,
+      "emit": "ballSplash",
+      "shake": 0.1,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 1.1,
+        "radius": 6
+      },
+      "haptic": "20ms @ 0.35",
+      "sites": []
     },
     {
       "name": "versusPierce",
@@ -10455,7 +10675,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 2620
+          "line": 2972
         }
       ]
     },
@@ -10478,7 +10698,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3046
+          "line": 3398
         }
       ]
     },
@@ -10498,7 +10718,31 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 6056
+          "line": 5575
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 6880
+        }
+      ]
+    },
+    {
+      "name": "versusGoalLineClear",
+      "sfx": "versusOvation",
+      "sfxMinGap": 0.5,
+      "emit": null,
+      "shake": 0.1,
+      "hitstop": 0,
+      "glow": 0.45,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 13
+      },
+      "haptic": "50ms @ 0.60 + 180ms @ 0.30",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 5579
         }
       ]
     },
@@ -10530,7 +10774,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 1980
+          "line": 2049
         }
       ]
     },
@@ -10553,11 +10797,11 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 4001
+          "line": 4557
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 4098
+          "line": 4654
         }
       ]
     },
@@ -10577,7 +10821,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3509
+          "line": 3875
         }
       ]
     },
@@ -10597,7 +10841,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3547
+          "line": 3913
         }
       ]
     },
@@ -10617,15 +10861,15 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 4892
+          "line": 5657
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 6788
+          "line": 7677
         },
         {
           "file": "path/src/ui/workbench.js",
-          "line": 2755
+          "line": 2765
         }
       ]
     },
@@ -10642,15 +10886,15 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 4893
+          "line": 5658
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 6804
+          "line": 7693
         },
         {
           "file": "path/src/ui/workbench.js",
-          "line": 2756
+          "line": 2766
         }
       ]
     },
@@ -10685,7 +10929,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 4524
+          "line": 5097
         }
       ]
     },
@@ -10705,11 +10949,11 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 4544
+          "line": 5117
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 5714
+          "line": 6484
         }
       ]
     },
@@ -10753,11 +10997,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8996
+          "line": 9823
         },
         {
           "file": "path/src/main.js",
-          "line": 9078
+          "line": 9905
         }
       ]
     },
@@ -10774,7 +11018,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8998
+          "line": 9825
         }
       ]
     },
@@ -10794,7 +11038,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9009
+          "line": 9836
         }
       ]
     },
@@ -10811,7 +11055,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8916
+          "line": 9743
         }
       ]
     },
@@ -10831,7 +11075,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8927
+          "line": 9754
         }
       ]
     },
@@ -10851,7 +11095,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8938
+          "line": 9765
         }
       ]
     },
@@ -10871,7 +11115,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9014
+          "line": 9841
         }
       ]
     },
@@ -10891,7 +11135,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9112
+          "line": 9939
         }
       ]
     },
@@ -10911,7 +11155,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9131
+          "line": 9958
         }
       ]
     },
@@ -10940,7 +11184,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9146
+          "line": 9973
         }
       ]
     },
@@ -10960,7 +11204,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9162
+          "line": 9989
         }
       ]
     },
@@ -10980,7 +11224,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9175
+          "line": 10002
         }
       ]
     },
@@ -11000,7 +11244,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9208
+          "line": 10035
         }
       ]
     },
@@ -11020,7 +11264,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9202
+          "line": 10029
         }
       ]
     },
@@ -11073,6 +11317,23 @@
       "sites": []
     },
     {
+      "name": "bossShockZap",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": "sparks",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/systems/bossPerks.js",
+          "line": 1229
+        }
+      ]
+    },
+    {
       "name": "belugaTrap",
       "sfx": "belugaTrap",
       "sfxMinGap": 0.05,
@@ -11088,7 +11349,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8960
+          "line": 9787
         }
       ]
     },
@@ -11108,7 +11369,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8965
+          "line": 9792
         }
       ]
     },
@@ -11128,7 +11389,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8969
+          "line": 9796
         }
       ]
     },
@@ -11214,7 +11475,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8790
+          "line": 9617
         }
       ]
     },
@@ -11234,7 +11495,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8897
+          "line": 9724
         }
       ]
     },
@@ -11251,7 +11512,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8898
+          "line": 9725
         }
       ]
     },
@@ -11286,7 +11547,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9024
+          "line": 9851
         }
       ]
     },
@@ -11303,7 +11564,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9029
+          "line": 9856
         }
       ]
     },
@@ -11323,7 +11584,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8805
+          "line": 9632
         }
       ]
     },
@@ -11340,7 +11601,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9038
+          "line": 9865
         }
       ]
     },
@@ -11360,7 +11621,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6541
+          "line": 7304
         }
       ]
     },
@@ -11377,7 +11638,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8458
+          "line": 9267
         }
       ]
     },
@@ -11397,7 +11658,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6561
+          "line": 7324
         }
       ]
     },
@@ -11417,7 +11678,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6638
+          "line": 7401
         }
       ]
     },
@@ -11437,7 +11698,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9066
+          "line": 9893
         }
       ]
     },
@@ -11454,7 +11715,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9222
+          "line": 10049
         }
       ]
     },
@@ -11474,7 +11735,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9225
+          "line": 10052
         }
       ]
     },
@@ -11494,11 +11755,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9072
+          "line": 9899
         },
         {
           "file": "path/src/main.js",
-          "line": 9079
+          "line": 9906
         }
       ]
     },
@@ -11515,7 +11776,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9248
+          "line": 10075
         }
       ]
     },
@@ -11535,7 +11796,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9269
+          "line": 10096
         }
       ]
     },
@@ -11552,7 +11813,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7885
+          "line": 8677
         }
       ]
     },
@@ -11569,7 +11830,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6772
+          "line": 7535
         }
       ]
     },
@@ -11589,7 +11850,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7880
+          "line": 8672
         }
       ]
     },
@@ -11609,7 +11870,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7898
+          "line": 8690
         }
       ]
     },
@@ -11626,7 +11887,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7904
+          "line": 8696
         }
       ]
     },
@@ -11701,7 +11962,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7914
+          "line": 8706
         }
       ]
     },
@@ -11718,7 +11979,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7939
+          "line": 8731
         }
       ]
     },
@@ -11735,7 +11996,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7940
+          "line": 8732
         }
       ]
     },
@@ -11752,7 +12013,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7949
+          "line": 8741
         }
       ]
     },
@@ -11772,7 +12033,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7951
+          "line": 8743
         }
       ]
     },
@@ -11789,7 +12050,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7954
+          "line": 8746
         }
       ]
     }
@@ -11805,92 +12066,92 @@
         {
           "path": "/music/747_Cocktails_Loop01.mp3",
           "exists": true,
-          "bytes": 362880,
-          "seconds": 9.072
+          "bytes": 145920,
+          "seconds": 9.096
         },
         {
           "path": "/music/747_Cocktails_Loop02.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop03.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop04.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop05.mp3",
           "exists": true,
-          "bytes": 1086720,
-          "seconds": 27.168
+          "bytes": 435456,
+          "seconds": 27.192
         },
         {
           "path": "/music/747_Cocktails_Loop06.mp3",
           "exists": true,
-          "bytes": 362880,
-          "seconds": 9.072
+          "bytes": 145920,
+          "seconds": 9.096
         },
         {
           "path": "/music/747_Cocktails_Loop07.mp3",
           "exists": true,
-          "bytes": 362880,
-          "seconds": 9.072
+          "bytes": 145920,
+          "seconds": 9.096
         },
         {
           "path": "/music/747_Cocktails_Loop08.mp3",
           "exists": true,
-          "bytes": 362880,
-          "seconds": 9.072
+          "bytes": 145920,
+          "seconds": 9.096
         },
         {
           "path": "/music/747_Cocktails_Loop09.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop10.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop11.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop12.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop13.mp3",
           "exists": true,
-          "bytes": 362880,
-          "seconds": 9.072
+          "bytes": 145920,
+          "seconds": 9.096
         },
         {
           "path": "/music/747_Cocktails_Loop14.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         },
         {
           "path": "/music/747_Cocktails_Loop15.mp3",
           "exists": true,
-          "bytes": 724800,
-          "seconds": 18.12
+          "bytes": 290688,
+          "seconds": 18.144
         }
       ],
       "depth": {
@@ -12012,14 +12273,6 @@
       "usedBy": []
     },
     {
-      "path": "/sfx/HG_SF_LOOP_HeavenlyMud_A_82BPM_loop.mp3",
-      "exists": true,
-      "bytes": 196750,
-      "seconds": 5.928,
-      "name": "HG_SF_LOOP_HeavenlyMud_A_82BPM_loop.mp3",
-      "usedBy": []
-    },
-    {
       "path": "/sfx/Seal_Ambient_05.mp3",
       "exists": true,
       "bytes": 147017,
@@ -12112,16 +12365,6 @@
       ]
     },
     {
-      "path": "/sfx/Magic1.mp3",
-      "exists": true,
-      "bytes": 89860,
-      "seconds": 2.2465,
-      "name": "Magic1.mp3",
-      "usedBy": [
-        "dumboCharm"
-      ]
-    },
-    {
       "path": "/sfx/SPLC-3964_FX_Oneshot_Explosion_Open_Exterior_lo.mp3",
       "exists": true,
       "bytes": 81792,
@@ -12153,17 +12396,6 @@
       ]
     },
     {
-      "path": "/sfx/HG_SF_FX_beboplex_2.mp3",
-      "exists": true,
-      "bytes": 73869,
-      "seconds": 2.088,
-      "name": "HG_SF_FX_beboplex_2.mp3",
-      "usedBy": [
-        "chumFull",
-        "uiClick"
-      ]
-    },
-    {
       "path": "/sfx/Seal_Ambient_01.mp3",
       "exists": true,
       "bytes": 73351,
@@ -12172,6 +12404,14 @@
       "usedBy": [
         "(ambient bed)"
       ]
+    },
+    {
+      "path": "/sfx/HG_SF_LOOP_HeavenlyMud_A_82BPM_loop.mp3",
+      "exists": true,
+      "bytes": 72098,
+      "seconds": 5.982083,
+      "name": "HG_SF_LOOP_HeavenlyMud_A_82BPM_loop.mp3",
+      "usedBy": []
     },
     {
       "path": "/sfx/Seal_Ambient_06.mp3",
@@ -12223,16 +12463,6 @@
       "usedBy": [
         "bossArrive",
         "versusGoalCheer"
-      ]
-    },
-    {
-      "path": "/sfx/Pilea_059.mp3",
-      "exists": true,
-      "bytes": 56423,
-      "seconds": 1.410575,
-      "name": "Pilea_059.mp3",
-      "usedBy": [
-        "celestialMoon"
       ]
     },
     {
@@ -12340,16 +12570,6 @@
       ]
     },
     {
-      "path": "/sfx/Juno60_blips_043.mp3",
-      "exists": true,
-      "bytes": 39705,
-      "seconds": 0.992625,
-      "name": "Juno60_blips_043.mp3",
-      "usedBy": [
-        "celestialMoon"
-      ]
-    },
-    {
       "path": "/sfx/ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02.mp3",
       "exists": true,
       "bytes": 39183,
@@ -12388,16 +12608,6 @@
       ]
     },
     {
-      "path": "/sfx/HG_FLY_Breath_Jers.mp3",
-      "exists": true,
-      "bytes": 38541,
-      "seconds": 0.984,
-      "name": "HG_FLY_Breath_Jers.mp3",
-      "usedBy": [
-        "breathIn"
-      ]
-    },
-    {
       "path": "/sfx/SPLC-4048_FX_Oneshot_UI_Glitch_Electronic_lo.mp3",
       "exists": true,
       "bytes": 38016,
@@ -12426,14 +12636,6 @@
       "usedBy": [
         "bakalarHaul"
       ]
-    },
-    {
-      "path": "/sfx/HG_UI_SynthMoan.mp3",
-      "exists": true,
-      "bytes": 35525,
-      "seconds": 0.888125,
-      "name": "HG_UI_SynthMoan.mp3",
-      "usedBy": []
     },
     {
       "path": "/sfx/OLIVER_DWILLY_FX_disco_laser_echo.mp3",
@@ -12544,32 +12746,13 @@
       ]
     },
     {
-      "path": "/sfx/Juno60_blips_050.mp3",
+      "path": "/sfx/Magic1.mp3",
       "exists": true,
-      "bytes": 28211,
-      "seconds": 0.705275,
-      "name": "Juno60_blips_050.mp3",
+      "bytes": 27898,
+      "seconds": 2.29875,
+      "name": "Magic1.mp3",
       "usedBy": [
-        "celestialSun"
-      ]
-    },
-    {
-      "path": "/sfx/Pilea_005.mp3",
-      "exists": true,
-      "bytes": 28211,
-      "seconds": 0.705275,
-      "name": "Pilea_005.mp3",
-      "usedBy": []
-    },
-    {
-      "path": "/sfx/fluteseal_01.mp3",
-      "exists": true,
-      "bytes": 27840,
-      "seconds": 0.696,
-      "name": "fluteseal_01.mp3",
-      "usedBy": [
-        "breach",
-        "sealBolt"
+        "dumboCharm"
       ]
     },
     {
@@ -12579,17 +12762,6 @@
       "seconds": 2.2465,
       "name": "OLIVER_DWILLY_FX_wtf_video_game_wake_up_sparkly_C.mp3",
       "usedBy": []
-    },
-    {
-      "path": "/sfx/HG_SF_FX_Arp2600_SpringShot_3.mp3",
-      "exists": true,
-      "bytes": 27018,
-      "seconds": 0.624,
-      "name": "HG_SF_FX_Arp2600_SpringShot_3.mp3",
-      "usedBy": [
-        "bossArrive",
-        "celestialSun"
-      ]
     },
     {
       "path": "/sfx/EG_Inhale_04.mp3",
@@ -12612,13 +12784,14 @@
       ]
     },
     {
-      "path": "/sfx/HGUI_Organ_Gyro.mp3",
+      "path": "/sfx/HG_SF_FX_beboplex_2.mp3",
       "exists": true,
-      "bytes": 26121,
-      "seconds": 0.653025,
-      "name": "HGUI_Organ_Gyro.mp3",
+      "bytes": 26018,
+      "seconds": 2.142083,
+      "name": "HG_SF_FX_beboplex_2.mp3",
       "usedBy": [
-        "celestialSun"
+        "chumFull",
+        "uiClick"
       ]
     },
     {
@@ -12760,16 +12933,6 @@
       ]
     },
     {
-      "path": "/sfx/Juno60_blips_047.mp3",
-      "exists": true,
-      "bytes": 20897,
-      "seconds": 0.522425,
-      "name": "Juno60_blips_047.mp3",
-      "usedBy": [
-        "garlicTick"
-      ]
-    },
-    {
       "path": "/sfx/OLIVER_DWILLY_clap_electronic_static_foley.mp3",
       "exists": true,
       "bytes": 20689,
@@ -12778,14 +12941,6 @@
       "usedBy": [
         "clap"
       ]
-    },
-    {
-      "path": "/sfx/HG_FLY_Beach_069.mp3",
-      "exists": true,
-      "bytes": 19852,
-      "seconds": 0.4963,
-      "name": "HG_FLY_Beach_069.mp3",
-      "usedBy": []
     },
     {
       "path": "/sfx/EliArf_Explode1.mp3",
@@ -12819,14 +12974,6 @@
         "pearlBurst",
         "pickupBlast"
       ]
-    },
-    {
-      "path": "/sfx/HG_FLY_Beach_003.mp3",
-      "exists": true,
-      "bytes": 18807,
-      "seconds": 0.470175,
-      "name": "HG_FLY_Beach_003.mp3",
-      "usedBy": []
     },
     {
       "path": "/sfx/Electricity_02.mp3",
@@ -12889,6 +13036,16 @@
       ]
     },
     {
+      "path": "/sfx/Pilea_059.mp3",
+      "exists": true,
+      "bytes": 17867,
+      "seconds": 1.462833,
+      "name": "Pilea_059.mp3",
+      "usedBy": [
+        "celestialMoon"
+      ]
+    },
+    {
       "path": "/sfx/EG_Inhale_01.mp3",
       "exists": true,
       "bytes": 17240,
@@ -12928,14 +13085,6 @@
         "airJump",
         "strike"
       ]
-    },
-    {
-      "path": "/sfx/HG_SF_Nuthatch_Lazer.mp3",
-      "exists": true,
-      "bytes": 16717,
-      "seconds": 0.417925,
-      "name": "HG_SF_Nuthatch_Lazer.mp3",
-      "usedBy": []
     },
     {
       "path": "/sfx/EliArf_BigKill_02.mp3",
@@ -13157,6 +13306,26 @@
       "usedBy": []
     },
     {
+      "path": "/sfx/HG_FLY_Breath_Jers.mp3",
+      "exists": true,
+      "bytes": 12852,
+      "seconds": 1.044917,
+      "name": "HG_FLY_Breath_Jers.mp3",
+      "usedBy": [
+        "breathIn"
+      ]
+    },
+    {
+      "path": "/sfx/Juno60_blips_043.mp3",
+      "exists": true,
+      "bytes": 12852,
+      "seconds": 1.044917,
+      "name": "Juno60_blips_043.mp3",
+      "usedBy": [
+        "celestialMoon"
+      ]
+    },
+    {
       "path": "/sfx/EliArf_Boost_01.mp3",
       "exists": true,
       "bytes": 12538,
@@ -13164,26 +13333,6 @@
       "name": "EliArf_Boost_01.mp3",
       "usedBy": [
         "strike"
-      ]
-    },
-    {
-      "path": "/sfx/HG_UI_Blip_Menu_Bic.mp3",
-      "exists": true,
-      "bytes": 12537,
-      "seconds": 0.313425,
-      "name": "HG_UI_Blip_Menu_Bic.mp3",
-      "usedBy": [
-        "bounce"
-      ]
-    },
-    {
-      "path": "/sfx/HG_UI_Blip_Menu_Plankton.mp3",
-      "exists": true,
-      "bytes": 12537,
-      "seconds": 0.313425,
-      "name": "HG_UI_Blip_Menu_Plankton.mp3",
-      "usedBy": [
-        "rarityCommon"
       ]
     },
     {
@@ -13216,6 +13365,14 @@
       "usedBy": [
         "versusBallTap"
       ]
+    },
+    {
+      "path": "/sfx/HG_UI_SynthMoan.mp3",
+      "exists": true,
+      "bytes": 11598,
+      "seconds": 0.940417,
+      "name": "HG_UI_SynthMoan.mp3",
+      "usedBy": []
     },
     {
       "path": "/sfx/Seal_07.mp3",
@@ -13294,26 +13451,6 @@
       "name": "Seal_Breach_01.mp3",
       "usedBy": [
         "breach"
-      ]
-    },
-    {
-      "path": "/sfx/HGUI_Organ_Shark.mp3",
-      "exists": true,
-      "bytes": 10448,
-      "seconds": 0.2612,
-      "name": "HGUI_Organ_Shark.mp3",
-      "usedBy": [
-        "strikePip"
-      ]
-    },
-    {
-      "path": "/sfx/HG_UI_Blip_Menu_Blockhead.mp3",
-      "exists": true,
-      "bytes": 10448,
-      "seconds": 0.2612,
-      "name": "HG_UI_Blip_Menu_Blockhead.mp3",
-      "usedBy": [
-        "uiHover"
       ]
     },
     {
@@ -13435,6 +13572,24 @@
       ]
     },
     {
+      "path": "/sfx/Juno60_blips_050.mp3",
+      "exists": true,
+      "bytes": 9404,
+      "seconds": 0.757583,
+      "name": "Juno60_blips_050.mp3",
+      "usedBy": [
+        "celestialSun"
+      ]
+    },
+    {
+      "path": "/sfx/Pilea_005.mp3",
+      "exists": true,
+      "bytes": 9404,
+      "seconds": 0.757583,
+      "name": "Pilea_005.mp3",
+      "usedBy": []
+    },
+    {
       "path": "/sfx/Seal_PlayerHit_02.mp3",
       "exists": true,
       "bytes": 9404,
@@ -13442,6 +13597,17 @@
       "name": "Seal_PlayerHit_02.mp3",
       "usedBy": [
         "playerHit"
+      ]
+    },
+    {
+      "path": "/sfx/fluteseal_01.mp3",
+      "exists": true,
+      "bytes": 9404,
+      "seconds": 0.757583,
+      "name": "fluteseal_01.mp3",
+      "usedBy": [
+        "breach",
+        "sealBolt"
       ]
     },
     {
@@ -13522,6 +13688,16 @@
       ]
     },
     {
+      "path": "/sfx/HGUI_Organ_Gyro.mp3",
+      "exists": true,
+      "bytes": 8777,
+      "seconds": 0.705333,
+      "name": "HGUI_Organ_Gyro.mp3",
+      "usedBy": [
+        "celestialSun"
+      ]
+    },
+    {
       "path": "/sfx/Seal_PlayerHit_05.mp3",
       "exists": true,
       "bytes": 8777,
@@ -13538,6 +13714,17 @@
       "seconds": 0.684,
       "name": "HG_UI_Blip_Nutatch-converted.mp3",
       "usedBy": []
+    },
+    {
+      "path": "/sfx/HG_SF_FX_Arp2600_SpringShot_3.mp3",
+      "exists": true,
+      "bytes": 8463,
+      "seconds": 0.679167,
+      "name": "HG_SF_FX_Arp2600_SpringShot_3.mp3",
+      "usedBy": [
+        "bossArrive",
+        "celestialSun"
+      ]
     },
     {
       "path": "/sfx/Seal_48.mp3",
@@ -13729,6 +13916,16 @@
       ]
     },
     {
+      "path": "/sfx/Juno60_blips_047.mp3",
+      "exists": true,
+      "bytes": 7209,
+      "seconds": 0.574667,
+      "name": "Juno60_blips_047.mp3",
+      "usedBy": [
+        "garlicTick"
+      ]
+    },
+    {
       "path": "/sfx/HGUI_s37_Knock_06_lo.mp3",
       "exists": true,
       "bytes": 6912,
@@ -13786,6 +13983,14 @@
       ]
     },
     {
+      "path": "/sfx/HG_FLY_Beach_069.mp3",
+      "exists": true,
+      "bytes": 6896,
+      "seconds": 0.548583,
+      "name": "HG_FLY_Beach_069.mp3",
+      "usedBy": []
+    },
+    {
       "path": "/sfx/Seal_PlayerHit__09.mp3",
       "exists": true,
       "bytes": 6896,
@@ -13824,6 +14029,14 @@
       "usedBy": [
         "bubblePop"
       ]
+    },
+    {
+      "path": "/sfx/HG_FLY_Beach_003.mp3",
+      "exists": true,
+      "bytes": 6582,
+      "seconds": 0.522417,
+      "name": "HG_FLY_Beach_003.mp3",
+      "usedBy": []
     },
     {
       "path": "/sfx/HG_UI_Blip_Menu_Spat-converted.mp3",
@@ -13892,16 +14105,6 @@
       ]
     },
     {
-      "path": "/sfx/HG_UI_Ball_Bink.mp3",
-      "exists": true,
-      "bytes": 6268,
-      "seconds": 0.1567,
-      "name": "HG_UI_Ball_Bink.mp3",
-      "usedBy": [
-        "bounce"
-      ]
-    },
-    {
       "path": "/sfx/EliArf_03.mp3",
       "exists": true,
       "bytes": 5955,
@@ -13935,6 +14138,14 @@
       "bytes": 5955,
       "seconds": 0.470167,
       "name": "EliArf_clack_02.mp3",
+      "usedBy": []
+    },
+    {
+      "path": "/sfx/HG_SF_Nuthatch_Lazer.mp3",
+      "exists": true,
+      "bytes": 5955,
+      "seconds": 0.470167,
+      "name": "HG_SF_Nuthatch_Lazer.mp3",
       "usedBy": []
     },
     {
@@ -14063,14 +14274,6 @@
       ]
     },
     {
-      "path": "/sfx/HG_UI_Blip_Click_Jagged.mp3",
-      "exists": true,
-      "bytes": 5223,
-      "seconds": 0.130575,
-      "name": "HG_UI_Blip_Click_Jagged.mp3",
-      "usedBy": []
-    },
-    {
       "path": "/sfx/HGUI_s37_Laser_03_lo.mp3",
       "exists": true,
       "bytes": 5184,
@@ -14152,6 +14355,26 @@
       ]
     },
     {
+      "path": "/sfx/HG_UI_Blip_Menu_Bic.mp3",
+      "exists": true,
+      "bytes": 4702,
+      "seconds": 0.36575,
+      "name": "HG_UI_Blip_Menu_Bic.mp3",
+      "usedBy": [
+        "bounce"
+      ]
+    },
+    {
+      "path": "/sfx/HG_UI_Blip_Menu_Plankton.mp3",
+      "exists": true,
+      "bytes": 4702,
+      "seconds": 0.36575,
+      "name": "HG_UI_Blip_Menu_Plankton.mp3",
+      "usedBy": [
+        "rarityCommon"
+      ]
+    },
+    {
       "path": "/sfx/Razor_Hit_01.mp3",
       "exists": true,
       "bytes": 4702,
@@ -14230,6 +14453,26 @@
       "seconds": 0.324,
       "name": "HG_UI_Blip_Menu_Bic-converted.mp3",
       "usedBy": []
+    },
+    {
+      "path": "/sfx/HGUI_Organ_Shark.mp3",
+      "exists": true,
+      "bytes": 4075,
+      "seconds": 0.3135,
+      "name": "HGUI_Organ_Shark.mp3",
+      "usedBy": [
+        "strikePip"
+      ]
+    },
+    {
+      "path": "/sfx/HG_UI_Blip_Menu_Blockhead.mp3",
+      "exists": true,
+      "bytes": 4075,
+      "seconds": 0.3135,
+      "name": "HG_UI_Blip_Menu_Blockhead.mp3",
+      "usedBy": [
+        "uiHover"
+      ]
     },
     {
       "path": "/sfx/HGUI_s37_Beep_03_lo.mp3",
@@ -14416,6 +14659,16 @@
       "usedBy": []
     },
     {
+      "path": "/sfx/HG_UI_Ball_Bink.mp3",
+      "exists": true,
+      "bytes": 2821,
+      "seconds": 0.209,
+      "name": "HG_UI_Ball_Bink.mp3",
+      "usedBy": [
+        "bounce"
+      ]
+    },
+    {
       "path": "/sfx/Seal_Shoot_04.mp3",
       "exists": true,
       "bytes": 2821,
@@ -14465,6 +14718,14 @@
       ]
     },
     {
+      "path": "/sfx/HG_UI_Blip_Click_Jagged.mp3",
+      "exists": true,
+      "bytes": 2507,
+      "seconds": 0.182833,
+      "name": "HG_UI_Blip_Click_Jagged.mp3",
+      "usedBy": []
+    },
+    {
       "path": "/sfx/Seal_Smack_03.mp3",
       "exists": true,
       "bytes": 2507,
@@ -14496,43 +14757,43 @@
       "ESM_PG_cinematic_fx_weapons_warefare_cannon_shot_ship_clanking_metal_03.mp3",
       "HGUI_s37_PulseCannon_03_lo.mp3",
       "ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02.mp3",
-      "HG_UI_SynthMoan.mp3",
       "OLIVER_DWILLY_FX_disco_laser_echo.mp3",
       "71_Pops_-_Squish_Pop_and_Pop_Gun.mp3",
       "explosion_release1.ogg",
-      "Pilea_005.mp3",
       "OLIVER_DWILLY_FX_wtf_video_game_wake_up_sparkly_C.mp3",
       "HGUI_s37_Explode_01_lo.mp3",
-      "HG_FLY_Beach_069.mp3",
-      "HG_FLY_Beach_003.mp3",
       "EliArf_EatChum_08.mp3",
-      "HG_SF_Nuthatch_Lazer.mp3",
       "FF_AS_fish_splash_tone.mp3",
       "HGUI_s37_Rumbler_01_lo.mp3",
       "EliArf_BigKill_01.mp3",
       "HGUI_s37_PulseCannon_04_lo.mp3",
       "HG_UI_Blip_Menu_Static-converted.mp3",
+      "HG_UI_SynthMoan.mp3",
       "ESM_PG_cinematic_fx_weapons_warefare_bodyfall_crunch_hit_drop_03_lo.mp3",
+      "Pilea_005.mp3",
       "HG_UI_Blip_Nutatch-converted.mp3",
       "Seal_Paps_takeDamage_03.mp3",
       "HG_UI_Blip_Menu_Tappies-converted.mp3",
       "HGUI_s37_Knock_06_lo.mp3",
       "EliArf_EatChum_06.mp3",
+      "HG_FLY_Beach_069.mp3",
+      "HG_FLY_Beach_003.mp3",
       "EliArf_TakeDamage_02.mp3",
       "EliArf_clack_01.mp3",
       "EliArf_03.mp3",
       "EliArf_clack_02.mp3",
+      "HG_SF_Nuthatch_Lazer.mp3",
       "EG_Eep.mp3",
       "EliArf_01.mp3",
       "Seal_Paps_takeDamage_02.mp3",
-      "HG_UI_Blip_Click_Jagged.mp3",
       "HG_UI_Blip_Menu_TikTok-converted.mp3",
       "HG_UI_Blip_Menu_Bic-converted.mp3",
       "HGUI_s37_Beep_03_lo.mp3",
       "Seal_Shoot_01.mp3",
       "Seal_Shoot_03.mp3",
       "ESM_VCSFX_FX_foley_one_shot_bottle_cork_drink_pop_open_nearfield_04.mp3",
-      "HG_UI_Blip_Noize-converted.mp3"
+      "HG_UI_Blip_Noize-converted.mp3",
+      "HG_UI_Blip_Click_Jagged.mp3"
     ],
     "unreferencedSounds": [
       "jetBed",
@@ -14560,13 +14821,16 @@
       "bossDeath",
       "hotSpotSeep",
       "hotSpotChumTrail",
+      "sealFlipTailBubbles",
       "projectileFizzle",
       "missileLaunchExtra",
       "strikeVent",
+      "boostShatter",
       "clubChips",
       "clubEmbers",
       "clubFrost",
       "clubSparks",
+      "bossShockZap",
       "whaleCrumbs"
     ]
   }

@@ -34,7 +34,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { commands, pages, GROUP_ORDER, ROOT, blurbFromFile, targetFile } from './hub-catalogue.mjs';
 import { GAMES } from './games.mjs';
-import { MAX_MESSAGE, PROD_BRANCH, SHIP_SCRIPT, checkMessage, shipArgs } from './hub-ship.mjs';
+import { MAX_MESSAGE, PROD_BRANCH, RIVE_PUSH, SHIP_SCRIPT, checkMessage, shipArgs } from './hub-ship.mjs';
 
 let failures = 0;
 const check = (label, cond, detail = '') => {
@@ -407,6 +407,24 @@ if (!up) {
   // one, because an exception in a shared gate is a gate that grows holes.
   const shipAll = await post('/api/run', { name: SHIP_SCRIPT });
   check(`refuses to ${SHIP_SCRIPT} from /api/run`, shipAll.status === 403);
+
+  // THE SECOND PUBLISH ENDPOINT, held to the same terms as the first: /api/run
+  // still refuses the script, the route itself refuses a caller that is not
+  // the workbench page, and it refuses any name that is not on the short list
+  // in hub-ship.mjs — which is what stops it becoming a command runner.
+  for (const name of Object.keys(RIVE_PUSH)) {
+    const viaRun = await post('/api/run', { name });
+    check(`refuses to ${name} from /api/run`, viaRun.status === 403, JSON.stringify(viaRun.body));
+    check(`${name} is a real script`, Boolean(pkg.scripts[name]));
+  }
+  const rivePost = (body, headers) => fetch(`${base}/api/rive-push`, { method: 'POST', headers, body: JSON.stringify(body) })
+    .then(async (r) => ({ status: r.status, body: await r.json() }));
+  const riveNoHeader = await rivePost({ name: 'sealitaire:push' });
+  check('the Rive push refuses a caller that is not the workbench', riveNoHeader.status === 403);
+  const notListed = await rivePost({ name: 'deploy' }, { 'X-Workbench': 'ship' });
+  check('the Rive push refuses a script that is not on its list', notListed.status === 403, JSON.stringify(notListed.body));
+  const notAScript = await rivePost({ name: 'rm -rf /' }, { 'X-Workbench': 'ship' });
+  check('the Rive push refuses text off the wire', notAScript.status === 403);
 
   const shipPost = (body, headers) => fetch(`${base}/api/ship`, { method: 'POST', headers, body: JSON.stringify(body) })
     .then(async (r) => ({ status: r.status, body: await r.json() }));

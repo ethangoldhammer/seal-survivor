@@ -51,6 +51,18 @@ import {
 } from '../systems/settings.js';
 
 const STYLES = `
+  /* OVER THE TABLE, and only then. Sealitaire and Wetris mount a full-screen
+     OPAQUE layer at z-index 60 (ui.js, .sv-sealitaire) — a second renderer's
+     canvas with the whole screen to itself — while this panel lives in the
+     .sv-ui layer at 8. So a pause opened over a table was open, focused,
+     keyboard-navigable and answering every button, 52 layers underneath an
+     opaque canvas: nothing on screen but the table, and the only clue that
+     anything had happened was that Escape had stopped leaving.
+     Lifted only on that route, because over a RUN the order is right as it
+     is and a panel that floats above everything is how a modal ends up over
+     a loading screen. */
+  .sv-pm-over { z-index: 70 !important; }
+
   /* The panel is a fixed-height scroller rather than a box that grows with its
      tab: the three tabs hold different numbers of rows, and a menu that
      changes size when you switch tabs makes the tab strip move out from under
@@ -266,6 +278,28 @@ let listeningFor = null;
 // difference belongs in the setting, not here.
 let standalone = false;
 
+// THE THIRD ROUTE: a TABLE, not a run. Sealitaire and Wetris are second
+// programs on their own canvas over a game that has been parked (main.js,
+// suspendForTable) — `gameState.running` is false, so canPause() is false and
+// the run's whole pause path is shut to them. What they share with a run is
+// everything on this panel: the settings are the DEVICE's, not the run's, and
+// a player who learned that the volume lives behind Escape should find it in
+// the same place at the card table.
+//
+// So the route is a set of overrides rather than a second menu — a title, a
+// label for the middle button, and the three things the buttons do. It is
+// cleared on hide, because a stale override would aim the run's own pause at
+// a table that is no longer on screen.
+let over = null;
+
+// The action a button runs: the table's where there is one, the run's
+// otherwise. Never both, and never a merge — a route supplies all three or
+// none, so a half-filled override cannot leave Resume pointing at the table
+// and Main Menu tearing down a run that is not there.
+function act(name) {
+  return (over && over[name]) || callbacks[name];
+}
+
 /**
  * Build the menu into `root` (the .sv-ui layer). Called once, from initUI.
  *
@@ -329,10 +363,12 @@ export function isPauseOpen() {
  *                         See the flag's own note; it changes the heading and
  *                         the footer, and nothing else.
  */
-export function showPauseMenu({ standalone: fromMenu = false } = {}) {
+export function showPauseMenu({ standalone: fromMenu = false, table = null } = {}) {
   if (open) return;
   open = true;
   standalone = fromMenu;
+  over = table;
+  wrap.classList.toggle('sv-pm-over', !!over);
   listeningFor = null;
   headEl.querySelector('.sv-title').textContent = standalone ? 'Settings' : 'Paused';
   headEl.querySelector('.sv-hint').textContent = standalone
@@ -346,7 +382,11 @@ export function showPauseMenu({ standalone: fromMenu = false } = {}) {
   // player is looking at their run rather than through the corner of the
   // screen at the water, which is the one time the pile is worth the space.
   // Sticky, or it would drift away three seconds into a menu being read.
-  revealPile(true);
+  // ...but not over a table: the pile is THIS RUN's kill shots, and there is
+  // no run behind Sealitaire. `standalone` already had no run either; it kept
+  // the pile because the main menu is still the game's own screen and the last
+  // run's shots belong on it. A card table is somebody else's program.
+  if (!over) revealPile(true);
   // Re-read every control from the live settings on the way in. The M key and
   // the P key change two of these from outside the menu, so a panel built once
   // and cached would open showing stale values.
@@ -370,6 +410,8 @@ export function showPauseMenu({ standalone: fromMenu = false } = {}) {
 export function hidePauseMenu() {
   if (!open) return;
   open = false;
+  over = null;
+  wrap.classList.remove('sv-pm-over');
   listeningFor = null;
   // Back to the clock: the pile eases out again a few seconds into play.
   releasePile();
@@ -431,11 +473,15 @@ function buildFooter() {
   footEl.innerHTML = '';
   // "Back" from the menu, "Resume" from a run — the same action and the same
   // callback, named for the thing it actually returns you to.
-  footEl.appendChild(button(standalone ? 'Back' : 'Resume', 'sv-btn', () => callbacks.onResume?.()));
+  footEl.appendChild(button(standalone ? 'Back' : 'Resume', 'sv-btn', () => act('onResume')?.()));
   // No run to restart when this was opened from the menu, and a button that
   // said so would either do nothing or silently start one.
   if (!standalone) {
-    footEl.appendChild(button('Restart run', 'sv-btn sv-btn-ghost', () => callbacks.onRestart?.()));
+    // THE MIDDLE BUTTON IS NAMED FOR WHAT IT RESTARTS. A run restarts the run;
+    // Sealitaire deals again; Wetris clears the board. The word is the route's
+    // because "Restart run" over a card table is a button that claims to throw
+    // away something that is not there.
+    footEl.appendChild(button(over?.restartLabel ?? 'Restart run', 'sv-btn sv-btn-ghost', () => act('onRestart')?.()));
     // THE WAY OUT OF THE RUN, not out of the panel. Beside Restart rather than
     // beside Resume because those two are the pair a player is choosing
     // between — one starts this seal's day again, the other abandons it — and
@@ -445,7 +491,7 @@ function buildFooter() {
     // would lead to the screen it was opened from. Dropped for the same reason
     // Restart is: a control that cannot honestly do anything is worse than a
     // missing one, because the player has to press it to find out.
-    footEl.appendChild(button(uiText('mainMenuButton'), 'sv-btn sv-btn-ghost', () => callbacks.onMainMenu?.()));
+    footEl.appendChild(button(uiText('mainMenuButton'), 'sv-btn sv-btn-ghost', () => act('onMainMenu')?.()));
   }
   footEl.appendChild(button('Defaults', 'sv-btn sv-btn-ghost', () => {
     // This tab only. A single button that wiped all three would be the one
@@ -815,5 +861,5 @@ export function updatePauseNav() {
   // B closes it, the way it closes a menu on any console. Start already
   // toggles the pause from main.js; this is the button a pad player tries
   // first, and without it the only way out was to find Start again.
-  if (menuInput.back) callbacks.onResume?.();
+  if (menuInput.back) act('onResume')?.();
 }

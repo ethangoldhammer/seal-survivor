@@ -117,6 +117,7 @@ local rows: { Row } = {
     { key = 'drawArc', min = 0, max = 0.6, value = 0.22, cat = 'stock' },             -- how far toward the viewer it comes over the top of that arc
     { key = 'stockDrop', min = 2, max = 30, value = 12, cat = 'stock' },               -- how fast a click drops the fan into the flip
     -- the wind-up: press and hold the deck, and the release throws the card
+    { key = 'holdTap', min = 0, max = 0.6, value = 0.22, cat = 'stock' },              -- seconds of holding that still count as a CLICK and wind up nothing. A mouse button is down for about a tenth of a second on every ordinary click, so without this a player who never meant to charge anything gets a throw; the wind-up starts counting after it
     { key = 'holdFull', min = 0.1, max = 2, value = 0.6, cat = 'stock' },             -- seconds of holding the deck that count as a FULL wind-up. Everything below scales with how much of this the hand gave it, and a tap gives none: that is the draw this table always had
     { key = 'holdWind', min = 0, max = 0.8, value = 0.34, cat = 'stock' },            -- how much of the fan's height a full wind-up takes back INTO the deck. The card does not go anywhere while it is wound; the deck pulls it in, and the flight springs out of that
     { key = 'holdFlip', min = 0, max = 4, value = 2, cat = 'stock' },                 -- extra WHOLE turns at a full wind-up. Whole, because a half would land the card on its back
@@ -288,20 +289,24 @@ local rows: { Row } = {
     -- family is decided at: a tanks.csv `bg` cell is an OVERRIDE for one card
     -- and is blank on all 52, so these four are what the table actually shows.
     -- Live, so dragging one repaints thirteen cards at once — the whole point
-    -- of having them here rather than in the row. fish is Heart, star
-    -- Diamond, bubble Spade, shell Club. `tankBg` above still scales all four.
-    { key = 'bgFishR', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgFishG', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgFishB', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgStarR', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgStarG', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgStarB', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgBubbleR', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgBubbleG', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgBubbleB', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgShellR', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgShellG', min = 0, max = 1, value = 1, cat = 'suits' },
-    { key = 'bgShellB', min = 0, max = 1, value = 1, cat = 'suits' },
+    -- of having them here rather than in the row. NAMED FOR THE MARK THAT IS
+    -- PRINTED, not for the theme's key: the cards show a Heart, a Diamond, a
+    -- Spade and a Club (table-cards.rml), while tanks.csv still keys its rows
+    -- `Q star` because that column is the file's own identifier. A slider
+    -- called bgStar over a card with a diamond on it is a translation you do
+    -- every time you reach for it. `tankBg` above still scales all four.
+    { key = 'bgHeartR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgHeartG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgHeartB', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgDiamondR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgDiamondG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgDiamondB', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgSpadeR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgSpadeG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgSpadeB', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgClubR', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgClubG', min = 0, max = 1, value = 1, cat = 'suits' },
+    { key = 'bgClubB', min = 0, max = 1, value = 1, cat = 'suits' },
     -- music
     { key = 'musicVolume', min = 0, max = 1, value = 0.5, cat = 'music' },            -- the track itself
     { key = 'sfxVolume', min = 0, max = 1, value = 0.8, cat = 'music' },              -- the card sounds (re-deal, flip, grab, play, invalid, foundation)

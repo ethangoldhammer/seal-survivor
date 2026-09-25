@@ -210,7 +210,22 @@ local CRT_UBO = CRT_HEAD + TANK_SLOTS * CRT_ENTRY
 -- edges, and the sim's walls (BAIT.Walls) are exactly what is visible.
 local CAM = { dist = 3.2, fov = 44, zFront = 1.0, zBack = -1.4 }
 local WALLS: BAIT.Walls = { dist = CAM.dist, tanHalf = math.tan(math.rad(CAM.fov / 2)), aspect = CARD_W / CARD_H, zFront = CAM.zFront, zBack = CAM.zBack }
+-- THE SUIT'S KEY AND THE SUIT'S NAME ARE DIFFERENT STRINGS, and both are
+-- load-bearing.
+--
+-- `SUIT_NAMES` is the KEY: tanks.csv's `card` column reads `Q star`, the
+-- TANKS-SAVE line reads `card=Q:star`, and the two have to agree or a save
+-- writes nothing. It is also the theme's own word, from before the French
+-- pips were drawn.
+--
+-- `SUIT_LABEL` is what a PERSON reads, and what the card itself shows: the
+-- marks in table-cards.rml are a Heart, a Diamond, a Spade and a Club, in
+-- that order (their own node names say so, and klondike's `isRed` agrees —
+-- suits 1 and 2 are the red ones). The panel said `card Q star` over a card
+-- with a diamond printed on it, which is a thing you have to translate every
+-- time you look at it.
 local SUIT_NAMES = { 'fish', 'star', 'bubble', 'shell' }
+local SUIT_LABEL = { 'hearts', 'diamonds', 'spades', 'clubs' }
 -- THE TANK BACKGROUND IS THE SUIT'S. A card's family is decided at the suit,
 -- so the colour lives there — four tuner rows per channel, live, so dragging
 -- one repaints thirteen cards while you watch rather than after a save and a
@@ -227,7 +242,10 @@ local SUIT_NAMES = { 'fish', 'star', 'bubble', 'shell' }
 -- than the ones that filled it. A block's locals are released at its `end`.
 local suitBg: (number) -> { number }
 do
-    local KEYS = { 'bgFish', 'bgStar', 'bgBubble', 'bgShell' }
+    -- In SUIT ORDER (1..4), which is the order the marks are drawn in:
+    -- heart, diamond, spade, club. See SUIT_NAMES for why the key and the
+    -- name are two different strings.
+    local KEYS = { 'bgHeart', 'bgDiamond', 'bgSpade', 'bgClub' }
     -- Into a per-suit buffer rather than a fresh list: this is read once per
     -- card per frame, and 52 three-element tables a frame is 52 tables for the
     -- collector to walk for a colour that has not moved.
@@ -529,6 +547,13 @@ type Table = {
     movesProp: Property<string>?,
     scoreProp: Property<string>?,
     clockProp: Property<string>?,
+    -- RE-DEAL ASKED FOR FROM OUTSIDE. The game's pause menu bumps the view
+    -- model's `deal` counter; `dealSeen` is the number this script last acted
+    -- on, so a change is the request and there is nothing to clear afterwards.
+    -- Seeded from the property's own value on bind rather than from 0, or a
+    -- table opened a second time in one session would deal twice on arrival.
+    dealProp: Property<number>?,
+    dealSeen: number,
 
     -- Water.
     goo: PUDDLE.Goo,
@@ -1526,7 +1551,14 @@ local function drawStock(self: Table, power: number)
             flight.t = 0
             flight.x, flight.y = v.x, v.y
             flight.power = power
-            flight.spin = 1 + 2 * math.floor(power * T.holdFlip + 0.5)
+            -- FLOOR, NOT ROUND. `+ 0.5` here bought the first extra whole
+            -- turn at a QUARTER of a wind-up — 0.15s, which is an ordinary
+            -- mouse click — so every click off the deck threw three half
+            -- turns and the card visibly flipped twice. A turn has to be paid
+            -- for in full: at holdFlip 2 the second turn arrives at half a
+            -- charge and the third at a whole one, and anything short of the
+            -- first one is the single flip this always was.
+            flight.spin = 1 + 2 * math.floor(power * T.holdFlip)
             flight.time = math.max(0.05, T.drawTime * (1 + power * T.holdTime))
             v.flip = 0
             v.vrot = -3 * (1 + power)
@@ -1568,11 +1600,23 @@ local function drawStock(self: Table, power: number)
     end
 end
 
--- THE HOLD, LET GO. `stockHold` is how long the deck has been under the
--- finger and `holdFull` is what a full wind-up costs in seconds; past that it
--- is simply full. A tap measures zero and draws exactly as it always has.
+-- HOW MUCH WIND-UP A PRESS WAS WORTH, 0..1. `holdFull` is what a full one
+-- costs in seconds — but the first `holdTap` of it is a CLICK and is worth
+-- nothing, because a mouse click is not instantaneous: the button is down for
+-- something like a tenth of a second every time, and measuring that as charge
+-- means a player who never meant to wind anything up still gets a throw.
+--
+-- Shared, because the wind-up the ribbon is drawn back by and the throw the
+-- release fires have to be the same number. They were the same expression
+-- twice, and the deadzone only landed in one of them.
+local function holdPower(held: number): number
+    local dead = math.min(T.holdTap, T.holdFull - 0.05)
+    return clamp((held - dead) / math.max(0.05, T.holdFull - dead), 0, 1)
+end
+
+-- THE HOLD, LET GO. A tap measures zero and draws exactly as it always has.
 local function releaseStock(self: Table)
-    local power = clamp(self.stockHold / math.max(0.05, T.holdFull), 0, 1)
+    local power = holdPower(self.stockHold)
     self.stockHold = -1
     self.stockHoldPad = false
     -- The fan drops into the draw: the top card flips off the ribbon. The
@@ -1661,7 +1705,7 @@ end
 local function cardName(id: number): string
     local suit = (id - 1) // 13 + 1
     local rank = (id - 1) % 13 + 1
-    return `{K.RANK_TEXT[rank]} {SUIT_NAMES[suit]}`
+    return `{K.RANK_TEXT[rank]} {SUIT_LABEL[suit]}`
 end
 
 -- What a colour row WRITES INTO, in place. A bg the card does not own yet is
@@ -2105,7 +2149,7 @@ local function spreadSuit(self: Table)
         end
     end
     recapSpecies(self)
-    print(`sealitaire: {cardName(id)}'s look spread over the {SUIT_NAMES[suit]} 2-10 ({rec.species.name})`)
+    print(`sealitaire: {cardName(id)}'s look spread over the {SUIT_LABEL[suit]} 2-10 ({rec.species.name})`)
 end
 
 -- The x of the row a drag is on, this frame.
@@ -3052,6 +3096,7 @@ local KEY = {
     M = 77,        -- mute
     R = 82,        -- cycle the card rim
     C = 67,        -- run the win cascade, won or not
+    F = 70,        -- stack the foundations to the next music gate
     J = 74,        -- audition: previous card sound
     K = 75,        -- audition: replay
     L = 76,        -- audition: next
@@ -3080,6 +3125,40 @@ local function keyboardEvent(self: Table, event: KeyboardEvent): boolean
         -- Pressing it again restarts, which is the tuning loop — drag a
         -- slider, press C, watch.
         startCascade(self)
+        return true
+    elseif event.key == KEY.F then
+        -- THE MUSIC'S ARC ON DEMAND, for the same reason C exists. The beds
+        -- are gated on cards reaching the foundations — ten for the
+        -- development, twenty-six for the loud one — and getting there is
+        -- several minutes of real solitaire. Nobody tunes a sixty-second
+        -- loop that way, and "the gates do not work" is what it looks like
+        -- from the outside when you have simply never crossed one.
+        --
+        -- Each press takes the foundations to the next threshold, so three
+        -- presses walk the whole arc: bed, development, loudest, win. It
+        -- BUILDS the piles rather than playing the cards there, so the deal
+        -- underneath is wrecked — press N for a fresh one afterwards. The
+        -- cascade key already empties them, so this table is used to it.
+        local at = K.founded(self.game)
+        local to = if at < 10 then 10 elseif at < 26 then 26 else 52
+        local put = 0
+        for suit = 1, 4 do
+            self.game.foundations[suit].cards = {}
+            for rank = 1, 13 do
+                if put < to then
+                    table.insert(self.game.foundations[suit].cards, {
+                        id = (suit - 1) * 13 + rank, suit = suit, rank = rank, faceUp = true,
+                    })
+                    put += 1
+                end
+            end
+        end
+        print(`sealitaire: foundations {at} -> {K.founded(self.game)}; the music follows at the next 4-bar line`)
+        if K.isWon(self.game) and self.win < 0 then
+            self.win = 0
+            self.energy = 1.5
+            MUSIC.noteWin(self.music, K.founded(self.game), self.game.score, self.game.moves)
+        end
         return true
     elseif event.key == KEY.R then
         T.cardRimMode = cardRimMode() % #RIM_MODES
@@ -4890,6 +4969,11 @@ local function init(self: Table, context: Context): boolean
         self.movesProp = vm:getString('moves')
         self.scoreProp = vm:getString('score')
         self.clockProp = vm:getString('clock')
+        local dealProp = vm:getNumber('deal')
+        self.dealProp = dealProp
+        if dealProp ~= nil then
+            self.dealSeen = dealProp.value
+        end
         -- `--data=lab=<species>`: the contact sheet's run. Read here, acted on
         -- when the tank table loads (after resize builds the GPU side).
         -- `--data=lab=<species>`, the contact sheet's run. Not readable yet:
@@ -5127,6 +5211,20 @@ local function advance(self: Table, dt: number): boolean
     self.time += dt
     local t = self.time
     local g = self.L
+
+    -- RE-DEAL ASKED FOR FROM OUTSIDE (the game's pause menu bumps `deal` on
+    -- the view model). Read here rather than on a data-bind callback because
+    -- this is the only place the table is allowed to change under itself: a
+    -- deal mid-frame would relayout the piles that drawCards is about to walk.
+    --
+    -- A CHANGE, not a value, so nothing has to reset it — see the property's
+    -- own note in scene.rml. It runs the same `deal` the N key and the
+    -- Re-Deal button run, so a deal is a deal however it was asked for.
+    local dealProp = self.dealProp
+    if dealProp ~= nil and dealProp.value ~= self.dealSeen then
+        self.dealSeen = dealProp.value
+        deal(self, freshSeed())
+    end
 
     -- Water: energy decays, ripples age.
     self.energy = math.max(0, self.energy - dt * (if self.game.won then 0.05 else 0.6))
@@ -5387,7 +5485,7 @@ local function advance(self: Table, dt: number): boolean
     if self.stockHold >= 0 then
         self.stockHold += dt
     end
-    local charge = if self.stockHold >= 0 then clamp(self.stockHold / math.max(0.05, T.holdFull), 0, 1) else 0
+    local charge = if self.stockHold >= 0 then holdPower(self.stockHold) else 0
     self.stockWind += (charge - self.stockWind) * (1 - math.exp(-9 * dt))
     -- Is the deck WANTED — the pointer on it and no card in hand. The fan's
     -- height scales that by the click pulse; the SOUND must not.
@@ -6889,6 +6987,7 @@ return function(context: Context): Layout<Table>
         movesProp = nil,
         scoreProp = nil,
         clockProp = nil,
+        dealProp = nil, dealSeen = 0,
 
         goo = PUDDLE.new(),
         bubbles = bubbles,

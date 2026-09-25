@@ -169,12 +169,37 @@ local current: AudioSound? = nil
 --   AT_BAR     the next bar, 2.55s. For the win, which must be immediate.
 local AT_PHRASE, AT_BLOCK, AT_BAR = 0, 1, 2
 
--- How near the end of a region `completed` is believed. A quarter second is
--- far longer than any clock drift across one region and far shorter than any
--- region, so it can correct a short asset and can never be triggered by a
--- handle that answers yes the moment it is asked.
-local BACKSTOP = 0.25
+-- HOW LONG A VOICE MUST HAVE PLAYED before `completed` is believed.
+--
+-- Two opposite failures meet here and a single rule has to survive both.
+--
+--   A HANDLE THAT LIES YES. A handle to a sound somebody else stopped
+--   answers `completed` having played nothing. At a hundred and twenty
+--   advances a second, believing it starts a new voice every frame.
+--
+--   A VOICE THAT ENDS EARLY. The region stops sounding before its length is
+--   up — a voice culled, a decode that gave out, a runtime that will not
+--   play a sixty-second asset. Then the clock is the only thing still
+--   running and it will not reach the region's length for another half
+--   minute, which is half a minute of SILENCE. That is the one that was
+--   shipping, and it is worse than the other: the first stutters, this one
+--   just stops.
+--
+-- Half a second separates them. Nothing that has played half a second is a
+-- handle answering reflexively, and nothing that ends after half a second
+-- should be waited out in silence. The clock still decides the musical
+-- moment — `elapsed >= length` is the normal loop point and it is exact —
+-- and this only catches a region that stopped when it should not have.
+local MIN_PLAY = 0.5
 
+-- Consecutive early ends before this stops believing `completed` at all. A
+-- runtime whose handles always answer yes would otherwise restart the region
+-- every half second forever, which is a stutter with no way to read it. Said
+-- once, and then the clock runs the loop on its own.
+local EARLY_LIMIT = 6
+
+local believeCompleted = true   -- until a runtime proves its handles lie
+local earlyEnds = 0
 local playing = 0        -- index into music.loops, 0 = nothing sounding
 local elapsed = 0        -- seconds into that region, from the frame's own dt
 local queued = 0         -- what to switch to, 0 = nothing waiting
@@ -372,13 +397,23 @@ local function playLoop(self: Music, i: number, volume: number): boolean
     if l == nil or l.src == nil then
         return false
     end
-    local old = current
-    if old ~= nil then
-        old:stop()
-    end
+    -- START FIRST, STOP SECOND. The order is the difference between a
+    -- failed start costing a region change and a failed start costing the
+    -- music: stopping first and then failing leaves nothing playing and
+    -- nothing to recover from, because the driver believes a sound it
+    -- already killed is still going. This way a refused voice leaves the
+    -- previous region running and the next pass tries again.
+    --
+    -- The two overlap for the width of one statement, which is far shorter
+    -- than a frame and far too short to flange even when it is the same
+    -- region starting again.
     local snd = startSound(l.src)
     if snd == nil then
         return false
+    end
+    local old = current
+    if old ~= nil then
+        old:stop()
     end
     snd.volume = volume
     current = snd
@@ -481,12 +516,38 @@ local function drive(self: Music, dt: number, volume: number, p: Progress): numb
     -- only believed near the end, which is the whole of the old guard
     -- expressed as a fact about this region instead of a stopwatch.
     local length = cur.endSec - cur.startSec
-    local ranOut = elapsed >= length
-        or (snd ~= nil and snd:completed() and elapsed >= length - BACKSTOP)
-    if snd == nil or ranOut then
-        local into = if queued ~= 0 then queued else wantFor(self, p)
-        if into == 0 then
-            into = playing
+    local onTime = elapsed >= length
+    local early = not onTime
+        and snd ~= nil
+        and elapsed >= MIN_PLAY
+        and believeCompleted
+        and snd:completed()
+    if early then
+        earlyEnds += 1
+        if earlyEnds >= EARLY_LIMIT then
+            believeCompleted = false
+            print(
+                `sealitaire: "{cur.id}" has ended early {earlyEnds} times running — ` ..
+                `this runtime's completed() cannot be trusted, so the clock will run the ` ..
+                `loop on its own from here. If the voice really is stopping, the region ` ..
+                `will now play past its end in silence instead of stuttering.`
+            )
+        end
+    elseif onTime then
+        earlyEnds = 0
+    end
+    if snd == nil or onTime or early then
+        -- AN EARLY END IS A DROPPED VOICE, NOT A MUSICAL BOUNDARY. It
+        -- resumes the same region and does not consume the queue: a glitch
+        -- must not be able to promote the arrangement a rung, or take the
+        -- win early, or eat the intro. Only a region that reached its end
+        -- gets to decide what comes next.
+        local into = playing
+        if not early then
+            into = if queued ~= 0 then queued else wantFor(self, p)
+            if into == 0 then
+                into = playing
+            end
         end
         if into ~= playing and self.loops[into].role == 2 then
             fireWash(cur, washVolume)
@@ -889,6 +950,7 @@ return {
     elapsedIn = function(): number return elapsed end,
     resetTransport = function()
         playing, elapsed, queued, queueAt, rungHigh = 0, 0, 0, AT_PHRASE, 0
+        believeCompleted, earlyEnds = true, 0
         sessionDeals, sessionWins = 0, 0
         current, washSound = nil, nil
         orphaned, sinceLoad = false, 0

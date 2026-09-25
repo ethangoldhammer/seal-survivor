@@ -18,7 +18,7 @@ import { poolState } from './systems/replayCams.js';
 import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
-  initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput, holdInput,
+  initInput, updateInput, pollMenuInput, clearPendingInput, inputDevice, inputTokens, input, menuInput, holdInput,
   setSealTapTarget,
 } from './input.js';
 import { worldToScreen } from './ui/project.js';
@@ -284,7 +284,8 @@ import { initTextPanel, refreshTextSpecimen } from './ui/textPanel.js';
 import { registerPreviewScreen } from './ui/ui.js';
 // The Klondike table behind the Club seal panel — a second Rive renderer on
 // its own canvas, lazily imported so a run that never opens it pays nothing.
-import { showSealitaire, hideSealitaire } from './ui/sealitaireTable.js';
+import { showSealitaire, hideSealitaire, pauseSealitaire, resumeSealitaire, sealitaireRedeal } from './ui/sealitaireTable.js';
+import { showWetris, hideWetris, pauseWetris, resumeWetris, wetrisRestart } from './ui/wetrisTable.js';
 import { ensureVersusStyle, applyGlassStyle, previewVersusUi, hideVersusPreview, PREVIEW_MATCH_SCREENS } from './systems/versus.js';
 import { initGamepadDebug, updateGamepadDebug } from './ui/gamepadDebug.js';
 import { initSfxDebug, updateSfxDebug } from './ui/sfxDebug.js';
@@ -1828,6 +1829,83 @@ function resumeFromTable() {
   startMusicAtRest();
 }
 
+// ---------------------------------------------------------------------------
+// PAUSING A TABLE.
+//
+// Sealitaire and Wetris are not runs — `gameState.running` is false while
+// either is up, so canPause() is false and setPaused/togglePause are shut to
+// them. They get the same PANEL (ui/pauseMenu.js, the `table` route) with
+// their own three buttons hung off it.
+//
+// THE FRAME LOOP IS OFF, which is the part that is easy to miss. suspendForTable
+// dropped the game's rAF, and `updatePauseNav` — the pad cursor — is called from
+// it. Left at that the menu would draw perfectly and answer no controller at
+// all: no cursor, no B, no Start. So a pause over a table runs a loop of its
+// own, polling the pad and nothing else (input.js, pollMenuInput) for exactly
+// as long as the menu is up.
+let tablePause = null;
+
+function tablePauseFrame() {
+  if (!tablePause) return;
+  tablePause.raf = requestAnimationFrame(tablePauseFrame);
+  pollMenuInput();
+  // Start closes it, the way it does in a run — main.js's own handler for that
+  // key is in the frame loop that is not running, and it would route through
+  // togglePause() anyway, which would hide the menu and leave the TABLE
+  // paused behind it with nothing left able to start it again.
+  if (menuInput.pause) { tablePause.onResume(); return; }
+  updatePauseNav();
+}
+
+/**
+ * @param restartLabel  what the middle button says — the route names what it
+ *                      restarts, because "Restart run" over a card table
+ *                      claims to throw away something that is not there.
+ * @param pause/resume  stop and start the table's own runtime.
+ * @param restart       deal again / clear the board. FALSE when the .riv has
+ *                      no such property, which is a shipped file older than
+ *                      the feature: the player is resumed rather than left on
+ *                      a menu whose middle button did nothing.
+ * @param close         unmount the table, for the way out to the main menu.
+ */
+function openTablePause({ restartLabel, pause, resume, restart, close }) {
+  if (isPauseOpen()) return;
+  pause();
+  const leave = () => {
+    if (tablePause) cancelAnimationFrame(tablePause.raf);
+    tablePause = null;
+    hidePauseMenu();
+  };
+  const resumeTable = () => { leave(); resume(); };
+  tablePause = { raf: 0, onResume: resumeTable };
+  showPauseMenu({
+    table: {
+      restartLabel,
+      onResume: resumeTable,
+      onRestart: () => {
+        // BUMP, THEN LET IT GO. The counter is read by the table's own advance
+        // (rive/sealitaire/table.luau), and a paused artboard does not advance
+        // — so the order is the whole of it: ask first, resume second, and the
+        // very next frame deals.
+        if (!restart()) console.warn('this build of the table cannot re-deal from the menu');
+        resumeTable();
+      },
+      // OUT TO THE MAIN MENU, which is already standing behind the table: the
+      // menu was never torn down (the sports list is a panel over it and the
+      // table is a canvas over that), so this is an unmount and a resume, not
+      // a returnToMenu — there is no run to tear down and calling it would
+      // reset a ledger nothing has written.
+      onMainMenu: () => {
+        leave();
+        close();
+        hideSealSports();
+        resumeFromTable();
+      },
+    },
+  });
+  tablePause.raf = requestAnimationFrame(tablePauseFrame);
+}
+
 /**
  * Blubberball's team select, from wherever it was asked for — the Seal sports
  * row, or the `?ball` door below.
@@ -1884,7 +1962,17 @@ function openSealSports() {
       suspendForTable();
       showSealitaire({
         parent: uiRoot(),
+        // Back: one press to the list it was opened from. The PAUSE menu's
+        // way out goes to the main menu instead — two routes, each landing
+        // where its own word says.
         onExit: () => { resumeFromTable(); openSealSports(); },
+        onPause: () => openTablePause({
+          restartLabel: uiText('pauseRedeal'),
+          pause: pauseSealitaire,
+          resume: resumeSealitaire,
+          restart: sealitaireRedeal,
+          close: hideSealitaire,
+        }),
       }).catch((err) => {
         // A build with no public/sealitaire.riv should never have offered the
         // row at all (ui.js only enables it when the file answers), so this is
@@ -1892,6 +1980,29 @@ function openSealSports() {
         // dead canvas up.
         console.warn('sealitaire failed to open', err);
         hideSealitaire();
+        resumeFromTable();
+        openSealSports();
+      });
+    },
+    // WETRIS IS SEALITAIRE'S SHAPE, so it parks the game the same way and
+    // for the same reasons — a second renderer over a menu that is never torn
+    // down, and Back lands where it left.
+    onWetris: () => {
+      hideSealSports();
+      suspendForTable();
+      showWetris({
+        parent: uiRoot(),
+        onExit: () => { resumeFromTable(); openSealSports(); },
+        onPause: () => openTablePause({
+          restartLabel: uiText('pauseRestartBoard'),
+          pause: pauseWetris,
+          resume: resumeWetris,
+          restart: wetrisRestart,
+          close: hideWetris,
+        }),
+      }).catch((err) => {
+        console.warn('wetris failed to open', err);
+        hideWetris();
         resumeFromTable();
         openSealSports();
       });
@@ -8237,7 +8348,12 @@ function runFrame(now) {
   // re-baselines the menu input, so the same press cannot both pause the game
   // and activate whatever row the cursor opened onto. `canPause` is what keeps
   // Start on the level-up screen doing what it has always done — confirm.
-  if (menuInput.pause && (isPauseOpen() || canPause())) togglePause();
+  // Not a table's pause: that one has its own loop and its own resume, and
+  // togglePause here would hide the menu and leave the table stopped behind
+  // it. (The frame this line is in is not running while a table is up, so
+  // this is belt and braces — but the two pauses must never share a key
+  // handler, and saying so here is cheaper than finding out.)
+  if (!tablePause && menuInput.pause && (isPauseOpen() || canPause())) togglePause();
 
   // Same ordering requirement. Outside the pause gate on purpose: the level-up
   // menu is only ever open WHILE paused, so gating this on !paused would mean

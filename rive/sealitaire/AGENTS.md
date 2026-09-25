@@ -116,6 +116,40 @@ Three things that are not just "scale everything":
   card (any portrait screen) there is height over; 70% of it goes into the fan
   step, because more of every buried card showing is the thing a small screen
   is short of. What the fan cannot use falls to the bottom, where the seal is.
+- **A SHORT screen gets a tighter budget.** Everything above is the desktop's,
+  and most of it is air: 124 card-px of chrome strip, 54 of row gap, a 322
+  column reserve, a 164 foot. On a 1000px screen that air is what makes the
+  table read as a table; on a 390px-tall **landscape** phone the same
+  fractions are 64% of the screen, and the card they left was 40px wide —
+  *smaller than the same phone gave in portrait*, which is where the width is
+  the limit and 440px of height sat spare. Landscape is klondike's worst case
+  and it was being handed the most generous spacing on the table. So the
+  strip, the seam and the column reserve blend to a tight set between 820px
+  and 470px of height (`TIGHT_AT`/`LOOSE_AT`), and the column gap and the side
+  padding blend to a tight set between 760px and 430px of **width**. A phone
+  on its side gets a **1.4x** card, a portrait one **1.15x**, and 1600x1000 is
+  untouched to a billionth of a pixel because both blends are 0 there.
+
+  **The wall is `fanFor`'s floor, and it is arithmetic rather than taste.** A
+  column of nineteen — six face-down and a full K-to-A run on it, rare but
+  legal — squeezes no further than `FAN_MIN` a card, so it always occupies
+  3.24 card heights from its own top edge. With the two rows above it that is
+  `chrome + seam + 4.24 * ch <= h`, which caps a 390px-tall screen at about a
+  56px card whatever else is trimmed. `COL_BUDGET_TIGHT` is set right at that
+  cap; nudge it down and `tests.luau` fails rather than a long column quietly
+  walking off the bottom where it cannot be picked up. Going further means
+  giving something up — the rank on a buried card (`FAN_MIN`), or the promise
+  that a nineteen-card column stays on screen.
+
+  **Portrait has almost nothing left.** Seven columns across 390px is a hard
+  55.7px ceiling with zero gap and zero margin, and the tight gap already
+  reaches 51.3. The only way past it is a layout that stops showing seven
+  columns at once.
+
+- **The seal is sized against the board, not the desktop's stack.** `sealRef`
+  reads `topPadCards + board`, which IS `STACK` wherever the budget is loose.
+  Off the constant instead it grew by the same 1.4 the landscape card did, and
+  half a 390px screen is a seal.
 
 The card also has a ceiling, 180px: the tank atlas is 8x7 tiles of `cw` x `ch`
 DEVICE pixels, so a card that grew with a very tall viewport would quietly
@@ -480,8 +514,9 @@ has left the stock cannot keep them.
 draw used to be the press, which is the right shape for a button and the wrong
 one for a card being pulled off a deck: the whole gesture was over before the
 hand had finished making it. `stockHold` is how long the deck has been held,
-`holdFull` is what a full wind-up costs in seconds, and everything the release
-does scales with the fraction of it the hand gave — turns (`holdFlip`), arc
+`holdTap` is how much of that is still just a CLICK and is worth nothing,
+`holdFull` is what a full wind-up costs, and everything the release does
+scales with the fraction of the rest the hand gave — turns (`holdFlip`), arc
 (`holdArc`), seconds in the air (`holdTime`), water (`holdGoo`), the ripple and
 the sound. **A tap measures zero and lands exactly where it always did**, so
 nothing has to be learned to keep playing the way you were.
@@ -495,7 +530,12 @@ not be undone.
 
 The turns are odd half-turns, always: `flip` is the turn's progress, the face
 swaps every half of one, and an even count would land the card on its own
-back. `holdFlip` is counted in WHOLE turns for that reason. The landing writes
+back. `holdFlip` is counted in WHOLE turns for that reason, and the count is
+FLOORED — rounded, the first extra turn arrived at a quarter of a wind-up,
+which is an ordinary mouse click, and every click off the deck flipped twice.
+A turn is paid for in full or it does not happen. The deadzone is the other
+half of that: without it a click measures 0.15 of a charge it never asked for,
+and gets the arc and the airtime of one. The landing writes
 `flip = 1` outright — pi and three pi draw the same card, but the ease that
 takes over afterwards would read 3 as a card three half-turns from home and
 spin it back.
@@ -780,8 +820,10 @@ screen, and a full sweep over that width is four stripes.
 A card is **red or black**, and both say so twice.
 
 **The background is the SUIT's.** Four colours, one per suit, as twelve
-tuner rows under the `suits` header — `bgFishR/G/B`, `bgStarR/G/B`,
-`bgBubbleR/G/B`, `bgShellR/G/B`. They are resolved in `drawFish` EVERY FRAME
+tuner rows under the `suits` header — `bgHeartR/G/B`, `bgDiamondR/G/B`,
+`bgSpadeR/G/B`, `bgClubR/G/B`, named for the mark the card PRINTS rather than
+for the theme's key (tanks.csv still reads `Q star`; the panel's card header
+reads `card Q diamonds`). They are resolved in `drawFish` EVERY FRAME
 rather than baked into the record at load, so dragging one repaints thirteen
 cards while you watch; baking it at parse time is the version where a drag
 does nothing until the next reload. `tankBg` still scales all four, and sits
@@ -1548,9 +1590,20 @@ matters: without it npm keeps `--apply` for itself and the tool runs a
 report, prints "run again with --apply" and exits 1, which reads exactly
 like the flag was never typed.
 
-All three are buttons on the Sealitaire card in `npm run hub`, in that order:
-pull, pull & apply, push. Push replaces the editor's copy with ours, so an
-unpulled nudge in the editor is gone after it.
+In `npm run hub`: pull and pull & apply are ordinary buttons in the command
+list. **Push is a held button in the Ship card**, beside `hold to ship` — it
+replaces the editor's copy with ours, so an unpulled nudge there is gone
+after it, and a publish does not get a plain click. It is the second and last
+exception to "publish scripts are terminal-only"; `hub-ship.mjs` has the
+terms, and the price is the hold alone rather than ship's typed message,
+because every push names a revision the editor can restore.
+
+For a while it was worse than either: `sealitaire:push` sat in the Publish
+DRAWER with its risk class still `check`, and those are different things —
+the drawer is where a script is listed, the class is whether `/api/run` will
+spawn it. So it had an ordinary Run button and one press sent the project up.
+Both Rive pushes are publish-classed now and `npm run test:hub` checks
+`/api/run` refuses them.
 
 Both `--rev` and `push` need `rive login`; without a session the CLI says so
 and exits, so a missing login can never look like a successful build. The
@@ -1563,6 +1616,17 @@ losslessly but writes a FRESH project — comments stripped, elements reordered,
 defaults elided — so `tools/rive-pull.mjs` indexes both sides by the ids `rive`
 stamps on every element and reports only the attributes somebody actually
 changed. `--apply` writes those back into the tag they came from and re-verifies.
+
+**It compares the FILES too**, and that is the part worth reading first. The
+element diff is by id over the .rml, and a script's body is not markup — so a
+project three days and a whole feature ahead of its pushed copy reported
+"nothing changed in the editor", which is true and useless. Every `.luau`,
+`.wgsl`, `.csv`, `.mesh` and `.bin` is compared byte for byte now: here-only
+or differing is an UNPUSHED change, remote-only is the editor's. A blob comes
+back under its ASSET name (`<BlobAsset file="sfx.csv" name="sfxBank">` is
+`sfxBank.bin` in a pulled project), so the six blobs are folded onto our names
+first — without that each one reads as a here-only file beside a remote-only
+twin and the real answer drowns.
 Elements ADDED or REMOVED in the editor are reported and never applied: there
 is no honest way to guess where a new shape belongs in a file organised by hand.
 

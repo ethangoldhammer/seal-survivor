@@ -52,7 +52,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { survey, ROLES, stop as stopPid } from './servers.mjs';
 import { commands, pages, GROUP_ORDER, ROOT } from './hub-catalogue.mjs';
-import { SHIP_SCRIPT, checkMessage, shipArgs, shipState, writeMessage } from './hub-ship.mjs';
+import { RIVE_PUSH, SHIP_SCRIPT, checkMessage, isRivePush, shipArgs, shipState, writeMessage } from './hub-ship.mjs';
 import { gameState } from './games.mjs';
 
 // The one number in this repo that is allowed to be a constant. PORT is
@@ -199,6 +199,12 @@ function state() {
     // What the ship card shows before you commit to anything: is there
     // anything to ship, and is this the branch that deploys.
     ship: shipState(ROOT),
+    // The Rive pushes the page may offer, filtered to the ones that are
+    // really in package.json — the page draws a button per entry, so a
+    // renamed script drops its button rather than drawing a dead one.
+    rivePush: Object.entries(RIVE_PUSH)
+      .filter(([name]) => commands().some((c) => c.name === name))
+      .map(([name, label]) => ({ name, label })),
     // THE GAMES, one row each, from tools/games.mjs. A viewer has no port, so
     // the socket survey above cannot find it; each row's own tune tool is
     // asked instead, which is how the card and that tool's `already open`
@@ -328,6 +334,24 @@ const server = createServer(async (req, res) => {
     if (!entry) return json(res, { error: `${SHIP_SCRIPT} is not a script in package.json` }, 500);
     const { file, cleanup } = writeMessage(message);
     return json(res, { id: startRun(entry, { args: shipArgs(file, Boolean(dry), Boolean(noVerify)), cleanup }).id });
+  }
+
+  // ---------------------------------------------------------------------
+  // RIVE PUSH — the second publish button, and the second endpoint.
+  //
+  // Same shape as /api/ship and separate from it for the same reason: one
+  // route per thing that reaches out, so neither gate has an exception in
+  // it. What it costs the presser is the hold on the button; what it costs
+  // here is that the name must be one of a handful written down in
+  // hub-ship.mjs AND a real script, so nothing off the wire is ever spawned.
+  // ---------------------------------------------------------------------
+  if (req.method === 'POST' && path === '/api/rive-push') {
+    if (!fromTheWorkbench(req)) return json(res, { error: 'the Rive push is only reachable from the workbench page' }, 403);
+    const { name = '' } = await readBody(req);
+    if (!isRivePush(name)) return json(res, { error: 'not a Rive push the workbench offers' }, 403);
+    const entry = commands().find((c) => c.name === name);
+    if (!entry) return json(res, { error: `${name} is not a script in package.json` }, 500);
+    return json(res, { id: startRun(entry).id });
   }
 
   if (req.method === 'POST' && path === '/api/stop-run') {

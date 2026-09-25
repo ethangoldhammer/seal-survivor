@@ -1787,6 +1787,24 @@ export function holdInput(io = input) {
   return io;
 }
 
+/**
+ * THE PAD, FOR A MENU AND NOTHING ELSE.
+ *
+ * `updateInput` is the whole game's poll and it runs inside the frame loop —
+ * which is exactly what Sealitaire and Wetris switch OFF (main.js,
+ * suspendForTable: a second renderer owns the screen and the game's rAF is
+ * dropped). A pause menu over one of those tables would therefore get no pad
+ * input at all: the cursor would not move, and B and Start would do nothing.
+ *
+ * This is the menu half on its own, so a caller with no frame loop can drive
+ * a panel. It takes no camera and no player because it touches neither — the
+ * aim, the movement and the hold timers all stay in `updateInput`, and calling
+ * that one with a parked world would read a player that may not exist.
+ */
+export function pollMenuInput() {
+  updateMenuInput(getGamepad());
+}
+
 export function updateInput(camera, playerPos) {
   const pad = getGamepad();
 

@@ -187,6 +187,15 @@
           <button class="btn" id="shipgo"><span class="fill"></span><span class="lbl">hold to ship</span></button>
         </span>
       </div>
+      <!-- THE SECOND PUBLISH BUTTON. A Rive push replaces what is open in the
+           editor, so it is a publish and /api/run still refuses it; it earns a
+           button because the CLI names a revision on every push and the editor
+           can restore the one before, which is not true of the site. The price
+           is the hold and nothing else — see hub-ship.mjs. -->
+      <div class="shiprow" id="rivepushrow">
+        <span id="rivepushstate">Rive push — replaces what is open in the editor. Pull first.</span>
+        <span class="acts" id="rivepushacts"></span>
+      </div>
     </div>
   </section>
 
@@ -300,6 +309,62 @@ async function ship(dry) {
   drawSkip();
   watch(r.id);
   poll();
+}
+
+// THE RIVE PUSHES. One held button per project the server offers, drawn
+// rather than typed so a project added to RIVE_PUSH appears here on its own.
+//
+// It shares the ship button's hold, and deliberately not its message field: a
+// push reaches one file in a personal workspace and the CLI leaves the
+// previous content in that file's revision history, so the thing the message
+// buys — a decision written down before it is irreversible — has nothing to
+// buy here. The hold is the whole price, and it is the same 1.2s, because
+// what it is defending against is the same stray click.
+function drawRivePush() {
+  const acts = $('#rivepushacts');
+  if (!acts) return;
+  const want = (ST.rivePush ?? []).map((p) => p.name).join(',');
+  if (acts.dataset.drawn === want) return;
+  acts.dataset.drawn = want;
+  acts.textContent = '';
+  for (const p of ST.rivePush ?? []) {
+    const b = el('button', 'btn');
+    b.id = `rivepush-${p.name.replace(/[^a-z]/gi, '')}`;
+    b.title = `Builds ${p.name} and sends it to its Rive file, replacing what is open there. Every push adds a revision, so the editor can restore the one before.`;
+    b.append(el('span', 'fill'), el('span', 'lbl', `hold to push ${p.label}`));
+    b.style.setProperty('--hold', `${HOLD_MS}ms`);
+    holdToFire(b, () => rivePush(p.name));
+    acts.append(b);
+  }
+}
+
+async function rivePush(name) {
+  const r = await fetch('/api/rive-push', {
+    method: 'POST',
+    headers: { 'X-Workbench': 'ship' },
+    body: JSON.stringify({ name }),
+  }).then((x) => x.json());
+  if (r.error) { alert(r.error); return; }
+  watch(r.id);
+  poll();
+}
+
+// Hold, don't click — the rule the ship button established, as a function so
+// the second button cannot drift from the first. A keyboard has no hold, so
+// Space and Enter say why rather than doing nothing.
+function holdToFire(btn, fire, ms = HOLD_MS) {
+  let timer = null;
+  const release = () => { clearTimeout(timer); timer = null; btn.classList.remove('holding'); };
+  btn.addEventListener('pointerdown', (e) => {
+    if (btn.disabled) return;
+    e.preventDefault();
+    btn.classList.add('holding');
+    timer = setTimeout(() => { release(); fire(); }, ms);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, release);
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); alert('Hold the button down.'); }
+  });
 }
 
 // The button says what it will do, and the hold is longer when what it will do
@@ -766,6 +831,7 @@ async function poll() {
   ST = await api('/api/state');
   $('#hubport').textContent = ST.port;
   drawShip();
+  drawRivePush();
   drawGames();
   drawServers();
   drawPages();

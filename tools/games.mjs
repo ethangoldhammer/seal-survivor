@@ -37,6 +37,7 @@
 
 import { join, resolve } from 'node:path';
 import { tableOpen } from './sealitaire-tune.mjs';
+import { boardOpen } from './wetris-tune.mjs';
 
 export const ROOT = resolve(import.meta.dirname, '..');
 
@@ -60,6 +61,27 @@ export const GAMES = [
     editor: 'sealitaire',
     app: 'sealitaire:app',
     open: tableOpen,
+  },
+  {
+    key: 'wetris',
+    label: 'Wetris',
+    // Same shape as Sealitaire's row, because it is the same KIND of game: a
+    // Rive CLI project with a viewer window and a tuning save loop, no port
+    // and no address. `boardOpen` is that tool's own check, exported for the
+    // same reason `tableOpen` is — a second copy of its pgrep pattern here
+    // would be a second answer to one question.
+    door: 'the board',
+    blurb: 'A falling-block stacker on Sealitaire\'s water — the live viewer window and the'
+      + ' tuning save loop. One at a time, on the same terms as the table: the viewer'
+      + ' rewrites tuning.luau when you press SAVE.',
+    script: 'wetris',
+    project: 'rive/wetris',
+    tune: 'tools/wetris-tune.mjs',
+    shot: 'wetris:shot',
+    log: 'rive/wetris/build/app.log',
+    editor: 'wetris',
+    app: 'wetris:app',
+    open: boardOpen,
   },
   {
     key: 'blubberball',

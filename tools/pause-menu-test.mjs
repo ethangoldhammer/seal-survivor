@@ -685,6 +685,78 @@ pause.showPauseMenu();
 pause.hidePauseMenu();
 check('...and standalone left the counter alone', toMenu === wasMenu, String(toMenu - wasMenu));
 
+// ---------------------------------------------------------------------------
+section('A table gets the same panel, with its own three buttons');
+// Sealitaire and Wetris are second programs over a PARKED game: running is
+// false, canPause() is false, and the run's whole pause path is shut to them.
+// They borrow this panel through the `table` route, which is a set of
+// overrides rather than a second menu.
+{
+  let tResume = 0, tRestart = 0, tMenu = 0;
+  const wasRun = { resumed, restarted, toMenu };
+  const table = {
+    restartLabel: UI_TEXT.pauseRedeal,
+    onResume: () => { tResume++; },
+    onRestart: () => { tRestart++; },
+    onMainMenu: () => { tMenu++; },
+  };
+
+  pause.showPauseMenu({ table });
+  check('the middle button is named for what it restarts',
+    footLabels().includes(UI_TEXT.pauseRedeal) && !footLabels().includes('Restart run'),
+    footLabels().join(' / '));
+  check('...and Resume and the main menu are still there',
+    footLabels().includes('Resume') && footLabels().includes(menuLabel),
+    footLabels().join(' / '));
+
+  // THE THREE BUTTONS MUST REACH THE TABLE AND NOT THE RUN. This is the whole
+  // hazard of the route: the run's callbacks are still installed from initUI,
+  // so a footer that forgot to ask the override would silently restart a run
+  // that is not on screen while the card table sat there paused.
+  const press = (label) => [...document.querySelectorAll('#svPauseFoot .sv-btn')]
+    .find((b) => b.textContent === label)?.click();
+  press(UI_TEXT.pauseRedeal);
+  check('the middle button is the table\'s, not the run\'s',
+    tRestart === 1 && restarted === wasRun.restarted, `table ${tRestart}, run ${restarted - wasRun.restarted}`);
+  pause.showPauseMenu({ table });
+  press(menuLabel);
+  check('...and so is the way out', tMenu === 1 && toMenu === wasRun.toMenu,
+    `table ${tMenu}, run ${toMenu - wasRun.toMenu}`);
+  pause.showPauseMenu({ table });
+  press('Resume');
+  check('...and so is Resume', tResume === 1 && resumed === wasRun.resumed,
+    `table ${tResume}, run ${resumed - wasRun.resumed}`);
+
+  // THE OVERRIDE IS CLEARED ON HIDE. Left behind, the next time the RUN paused
+  // its buttons would still be pointing at a table that is no longer on the
+  // screen — and the failure is invisible until somebody pauses a run after
+  // playing a hand of cards, which is not a thing anybody does on purpose.
+  pause.hidePauseMenu();
+  pause.showPauseMenu();
+  check('a run paused after a table gets its own buttons back',
+    footLabels().includes('Restart run') && !footLabels().includes(UI_TEXT.pauseRedeal),
+    footLabels().join(' / '));
+  press('Restart run');
+  check('...and they call the run, not the table',
+    restarted === wasRun.restarted + 1 && tRestart === 1,
+    `run ${restarted - wasRun.restarted}, table ${tRestart}`);
+  pause.hidePauseMenu();
+
+  // B on the pad closes a menu on any console, and the table route has to
+  // answer it with the TABLE's resume — that is the callback that starts the
+  // artboard again. Routed through the run's it would hide the panel and
+  // leave the table stopped behind it, with nothing left able to start it.
+  pause.showPauseMenu({ table });
+  const was = tResume;
+  const { menuInput: mi } = await import('../path/src/input.js');
+  mi.back = true;
+  pause.updatePauseNav();
+  mi.back = false;
+  check('pad B resumes the table, not the run',
+    tResume === was + 1 && resumed === wasRun.resumed, `table ${tResume - was}`);
+  pause.hidePauseMenu();
+}
+
 // A closed menu must be inert: its window listener is registered for the life
 // of the page, and arrow keys have to go back to steering the seal.
 S.resetSettings();

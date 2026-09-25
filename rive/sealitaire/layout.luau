@@ -90,6 +90,71 @@ local SPARE_COL = 0.70
 -- holding any closer than the one this was tuned on.
 local CARD_MAX = 180
 
+-- ---------------------------------------------------------------------------
+-- THE TIGHT BUDGET — what a SHORT screen gets instead
+-- ---------------------------------------------------------------------------
+-- Everything above is the desktop's, and most of it is air: 124 card-px of
+-- chrome strip, 54 of row gap, a 322 column reserve and a 164 foot. On a
+-- 1000px screen that air is what makes the table read as a table.
+--
+-- On a 390px-tall LANDSCAPE phone the same fractions are 64% of the screen,
+-- and the card they leave is 40px wide — SMALLER than the one the same phone
+-- gets in PORTRAIT, where the width is the limit instead and the height is
+-- 440px of spare. Landscape is klondike's worst case and it was being handed
+-- the most generous spacing of any viewport, which is how a phone turned
+-- sideways ended up with the smallest cards on the table.
+--
+-- So the vertical budget TIGHTENS as the screen gets short. Nothing is cut
+-- that is load-bearing: the chrome strip comes down to what the deal button
+-- actually stands in, the row gap to a seam, and the column reserve to the
+-- room a column really needs before `fanFor` starts squeezing it.
+local TOP_PAD_TIGHT = 56 / CARD_H     -- the button's 44 plus air, not the old HUD row's 124
+-- The seam between the two rows. Not the 12 the arithmetic would allow: at
+-- that the waste and the column under it read as one stack, and telling the
+-- two rows apart is most of how you read the board at a glance. The 12 it
+-- costs comes off the column reserve below.
+local ROW_GAP_TIGHT = 24 / CARD_H
+local COL_BUDGET_TIGHT = 216 / CARD_H
+-- The foot is NOT in this list. It is where the wordmark and the readouts
+-- stand and they do not shrink with the card (see `ui`), so the height they
+-- need is the same however short the screen is; cutting the card's share of
+-- it would only move the columns down onto the words.
+--
+-- WHY 214 AND NOT LESS. The wall is `fanFor`'s floor. A column of nineteen —
+-- six face-down and a full K-to-A run on top, which is rare but legal — can
+-- be squeezed no further than FAN_MIN per card, so it always occupies
+-- 3.24 card heights from its own top edge. Add the two rows above it and the
+-- chrome, and the card a 390px-tall screen can carry is capped at about 57px
+-- wide whatever else is trimmed. 214 is the largest card that still leaves
+-- that column on the screen once the seam above is paid for; past it the
+-- buried cards of a long column go off
+-- the bottom edge, where they cannot be seen or picked up. `tests.luau`
+-- asserts it at every landscape size, so a nudge here fails loudly.
+
+-- Where a screen counts as short, and where it is back to the desktop's air.
+-- 820 is chosen so a phone in PORTRAIT (844 and up) keeps the loose budget:
+-- its problem is width, and spending the extra height on a fan it can use is
+-- the right answer there.
+local TIGHT_AT = 470
+local LOOSE_AT = 820
+
+-- The gap between columns is a desktop luxury too, and the one that matters
+-- on a NARROW screen, where seven columns across 390px is the whole of what
+-- decides the card. 0.2 of a card between each of six gaps is a fifth of the
+-- width spent on nothing.
+local GAP_RATIO_TIGHT = 0.07
+local NARROW_AT = 430
+local WIDE_AT = 760
+
+-- The deal button rides the strip down with it, or it would sit outside a
+-- chrome band half its old height.
+local BUTTON_Y = 30
+local BUTTON_Y_TIGHT = 8
+
+local function mix(a: number, b: number, t: number): number
+    return a + (b - a) * t
+end
+
 -- A fan step may not pass this fraction of a card: past it the column reads
 -- as loose cards rather than a stack.
 local FAN_MAX = 0.60
@@ -205,28 +270,42 @@ function M.compute(w: number, h: number): Geom
     -- because they clear it by six pixels of height and nothing else.
     local ui = math.min(1.25, math.max(math.min(w / 1600, h / 1000), 0.8))
     ui = math.min(ui, w / 620)
-    local chromeTop = TOP_PAD * CARD_H * ui
+
+    -- HOW SHORT, AND HOW NARROW. Two separate questions with two separate
+    -- answers, because they are two different squeezes: a landscape phone is
+    -- short and wide, a portrait one is tall and narrow, and the desktop is
+    -- neither. Both are 0 at 1600x1000, so the reference is untouched.
+    local tight = clamp((LOOSE_AT - h) / (LOOSE_AT - TIGHT_AT), 0, 1)
+    local narrow = clamp((WIDE_AT - w) / (WIDE_AT - NARROW_AT), 0, 1)
+
+    local topPadCards = mix(TOP_PAD, TOP_PAD_TIGHT, tight)
+    local rowGapCards = mix(ROW_GAP, ROW_GAP_TIGHT, tight)
+    local colCards = mix(COL_BUDGET, COL_BUDGET_TIGHT, tight)
+    local board = 1 + rowGapCards + 1 + colCards + FOOT_PAD
+    local chromeTop = topPadCards * CARD_H * ui
 
     -- The card is whichever of the two limits bites first: seven columns
     -- across the width, or the rest of the stack down what height is left.
-    local padX = math.max(12, w * 0.03)
-    local byWidth = (w - 2 * padX) / (COLS + (COLS - 1) * GAP_RATIO)
-    local byHeight = (math.max(1, h - chromeTop) / BOARD) / ASPECT
+    local gapRatio = mix(GAP_RATIO, GAP_RATIO_TIGHT, narrow)
+    local padX = mix(math.max(12, w * 0.03), math.max(4, w * 0.012), narrow)
+    local byWidth = (w - 2 * padX) / (COLS + (COLS - 1) * gapRatio)
+    local byHeight = (math.max(1, h - chromeTop) / board) / ASPECT
     local cw = clamp(math.min(byWidth, byHeight), 20, CARD_MAX)
     local ch = cw * ASPECT
     local fit = cw / CARD_W
-    local gap = cw * GAP_RATIO
+    local gap = cw * gapRatio
     local left = (w - (COLS * cw + (COLS - 1) * gap)) / 2
 
     -- Height the board did not need. Zero whenever the height is the limit,
-    -- which is the desktop's case and why the reference is exact.
-    local spare = math.max(0, h - chromeTop - BOARD * ch)
+    -- which is the desktop's case and why the reference is exact — and zero
+    -- again on a short screen, which is the whole point of the tight budget.
+    local spare = math.max(0, h - chromeTop - board * ch)
     local topPad = chromeTop + spare * SPARE_TOP
-    local rowGap = ROW_GAP * ch + spare * SPARE_GAP
+    local rowGap = rowGapCards * ch + spare * SPARE_GAP
     local topY = topPad + ch / 2
     local tabY = topY + ch + rowGap
 
-    local budget = COL_BUDGET * ch
+    local budget = colCards * ch
     local colRoom = budget + spare * SPARE_COL
     local fanUp = math.min(FAN_UP * ch * (colRoom / budget), ch * FAN_MAX)
     local fanDown = fanUp * (FAN_DOWN / FAN_UP)
@@ -267,8 +346,13 @@ function M.compute(w: number, h: number): Geom
         -- hidden in it, and only the MOVES column shows; a rectangle the
         -- hidden width would run off a 320px screen.
         stats = { x = 300 * ui, y = h - 86 * ui, w = 140 * ui, h = 46 * ui },
-        button = { x = w - 200 * ui, y = 30 * ui, w = 160 * ui, h = 44 * ui },
-        sealRef = math.min(ch * STACK, w * (1000 / 1600)),
+        button = { x = w - 200 * ui, y = mix(BUTTON_Y, BUTTON_Y_TIGHT, tight) * ui, w = 160 * ui, h = 44 * ui },
+        -- THE SEAL IS SIZED AGAINST THE BOARD IT SWIMS ROUND, not against the
+        -- desktop's stack: read off `STACK` it would have grown by the same
+        -- 1.45 the landscape card did, and half a 390px screen is a seal.
+        -- `topPadCards + board` IS `STACK` wherever the budget is loose, so
+        -- the desktop's seal is the one it always was.
+        sealRef = math.min(ch * (topPadCards + board), w * (1000 / 1600)),
         tuner = {
             x = w - 20 - colW * cols - gutter, y = 10,
             colW = colW, cols = cols, gutter = gutter,

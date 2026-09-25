@@ -35,7 +35,7 @@ const RIVE = process.env.RIVE_CLI || join(process.env.HOME ?? '', '.rive/bin/riv
 
 // The suits, in tuning.luau's key order — and what they print as in a corner:
 // fish is the Heart, star the Diamond, bubble the Spade, shell the Club.
-const SUITS = ['Fish', 'Star', 'Bubble', 'Shell'];
+const SUITS = ['Heart', 'Diamond', 'Spade', 'Club'];
 
 // The candidates. Each is four hexes in that order. Starting points to look
 // at, not a recommendation — edit the list, or pass your own four on the

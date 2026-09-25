@@ -97,7 +97,7 @@
              state machine yet. -->
         <Node x="6" y="7.5" name="Rank_ROOT" scaleX="0.400000006" scaleY="0.400000006" id="2:1180">
             <Text x="-14.379043" y="-23.983398" sizingValue="autoWidth" name="Rank" id="2:138">
-                <TextStylePaint fontSize="41" letterSpacing="-0.03" fontAssetId="0:1108" familyName="Brygada 1918" styleName="Regular" name="S" id="2:22">
+                <TextStylePaint fontSize="53" letterSpacing="-0.03" fontAssetId="0:1108" familyName="Brygada 1918" styleName="Regular" name="S" id="2:22">
                     <!-- Ethan's drop shadow, from the editor. Feather inside a Fill
                          draws nothing in the CLI renderer (rive docs drawing), so this
                          shows in the editor only until Rive fixes it. Its strength and
@@ -159,7 +159,7 @@
              first fill is its drop shadow, the rank's construct (a black fill
              with a Feather) bound to the same shadowSoft/X/Y numbers, so the
              corner's shadows are one setting. -->
-        <Node x="7.5" y="24.5" name="Suit_ROOT" scaleX="0.800000012" scaleY="0.800000012" id="2:1401">
+        <Node x="7.5" y="27" name="Suit_ROOT" scaleX="1" scaleY="1" id="2:1401">
             <Node name="Fish" id="2:1403">
                 <DataBindContext sourcePathIds="0:320-0:323" propertyKey="18" id="2:1404"/>
                 <Shape name="Heart" id="2:1310">

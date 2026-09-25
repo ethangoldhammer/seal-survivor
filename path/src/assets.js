@@ -431,8 +431,23 @@ export const ASSETS = {
     // locomotion uses the water clips; breaching the surface swaps to the
     // land ones. See systems/animation.js for how one-shots interrupt and
     // hand back to locomotion.
+    //
+    // THE IDLE IS NOT THE FILE'S `water_idle`, it is two of its wags twice.
+    // The clip is four 20-frame tail wags and the fourth is timed wrong:
+    // across frames 71-74 tail01 all but stops (0.11 rad/s where the other
+    // three wags turn at 0.37) and then catches up at 1.30, with tail02
+    // whipping at 3.0 over the seam — a hitch once per loop. The POSE at the
+    // seam matches, so `npm run takes` calls 0-80 clean; only the speed is
+    // wrong. 28-68 is two good wags (seam 0.025%, the best loop in the file),
+    // and `repeat: 2` plays them twice so the loop stays 80 frames long and
+    // CONFIG.animation.states.idle.beatsPerLoop — shared by every creature's
+    // idle — still lands one wag per beat.
+    subclipSource: 'Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle',
+    subclips: {
+      sealWaterIdle: [28, 68, 2],
+    },
     animations: {
-      idle: 'Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle',
+      idle: 'sealWaterIdle',
       swim: 'Furseal_Rig|Furseal_Rig|Furseal_Rig|swim',
       boost: 'Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding',
       surfaceIdle: 'Furseal_Rig|Furseal_Rig|Furseal_Rig|idle',
@@ -6302,6 +6317,33 @@ function isolateMesh(model, index) {
 // Ranges are [startFrame, endFrame] against `subclipFps` (the file's own
 // keyframe rate, NOT the display frame rate). The source clip is kept as
 // well, so an asset can still map a state to the whole take if it wants.
+//
+// An optional third number repeats the range end to end — [28, 68, 2] is
+// frames 28-68 played twice — for a clean stretch that has to fill the length
+// of the take it replaces. A repeated cut is RESAMPLED at every frame rather
+// than trimmed: subclip() drops a track with no key inside the range, and a
+// dropped track is a bone the mixer stops writing, which holds whatever the
+// last clip left in it.
+function repeatSubclip(source, name, from, to, repeat, fps) {
+  const len = to - from;
+  const tracks = source.tracks.map((track) => {
+    const size = track.getValueSize();
+    const interp = track.createInterpolant();
+    const times = new Float32Array(len * repeat);
+    const values = new Float32Array(len * repeat * size);
+    for (let i = 0; i < len; i++) {
+      const v = interp.evaluate((from + i) / fps);
+      for (let r = 0; r < repeat; r++) {
+        const k = r * len + i;
+        times[k] = k / fps;
+        values.set(v, k * size);
+      }
+    }
+    return new track.constructor(track.name, times, values);
+  });
+  return new THREE.AnimationClip(name, (len * repeat) / fps, tracks);
+}
+
 function buildSubclips(clips, def, label) {
   if (!def.subclips || clips.length === 0) return clips;
   const source = def.subclipSource
@@ -6314,13 +6356,17 @@ function buildSubclips(clips, def, label) {
   const fps = def.subclipFps ?? 30;
   const out = clips.slice();
   for (const [name, range] of Object.entries(def.subclips)) {
-    const [from, to] = range;
+    const [from, to, repeat = 1] = range;
     // subclip() keeps any keyframe inside the range; a range past the end of
     // the take yields a clip with no motion at all, which is a silent freeze
     // rather than an error, so it's worth saying so out loud.
     const maxFrame = Math.round(source.duration * fps);
     if (from >= maxFrame) {
       console.warn(`[assets] "${label}" subclip "${name}" starts at frame ${from}, past the end of "${source.name}" (${maxFrame} frames) — skipped.`);
+      continue;
+    }
+    if (repeat > 1) {
+      out.push(repeatSubclip(source, name, from, Math.min(to, maxFrame), repeat, fps));
       continue;
     }
     const cut = THREE.AnimationUtils.subclip(source.clone(), name, from, Math.min(to, maxFrame), fps);

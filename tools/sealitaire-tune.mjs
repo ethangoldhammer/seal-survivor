@@ -202,13 +202,24 @@ function save(pairs) {
   const before = readFileSync(TUNING, 'utf8');
   let src = before;
   let changed = 0;
+  // A KEY WITH NO ROW IS REPORTED, not dropped. The regex below simply
+  // matches nothing for an unknown key, so a save from a viewer holding an
+  // older tuning.luau lost those values without a word — which is exactly
+  // what renaming the four suit rows (bgFish -> bgHeart) would have done to
+  // a window that was already open. Twelve colours, silently not saved.
+  const missing = [];
   for (const [key, value] of pairs) {
     const re = new RegExp(`(\\{\\s*key\\s*=\\s*'${key}'\\s*,[^}]*?value\\s*=\\s*)([-\\d.]+)`);
+    if (!re.test(src)) { missing.push(key); continue; }
     const next = src.replace(re, (all, head, old) => {
       if (+old !== +value) changed++;
       return head + value;
     });
     src = next;
+  }
+  if (missing.length) {
+    process.stderr.write(`\n[tune] ${missing.length} key(s) have no row in tuning.luau and were NOT saved: ${missing.join(', ')}`
+      + '\n[tune] the viewer is holding an older tuning.luau — close it and reopen to pick up renamed rows\n');
   }
   // Only touch the file when a value moved: a write is a rebuild, and a
   // rebuild restarts the deal under you.

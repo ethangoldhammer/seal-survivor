@@ -63,6 +63,14 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLISH = new Set([
   'deploy', 'deploy:preview',
   'ship', 'ship:all', 'ship:phone', 'ship:mac',
+  // A RIVE PUSH REPLACES WHAT IS OPEN IN THE EDITOR, so it reaches somebody
+  // else's screen and belongs here. It sat in the Publish DRAWER while its
+  // risk class stayed `check`, which is not the same thing at all: the drawer
+  // is where a script is listed, the class is whether /api/run will spawn it.
+  // So both pushes had an ordinary Run button and one press sent the project
+  // up. They have a held button of their own now (hub-ship.mjs, RIVE_PUSH),
+  // and /api/run refuses them like every other publish.
+  'rive:push', 'sealitaire:push',
 ]);
 
 const WRITES = new Set([
@@ -72,7 +80,7 @@ const WRITES = new Set([
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
   'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit', 'shrink',
   'ios', 'ios:run', 'ios:sync',
-  'sealitaire:pull:apply',
+  'sealitaire:pull:apply', 'wetris:sync', 'wetris:sfx', 'wetris:music', 'wetris:pull:apply',
 ]);
 
 // Long-running: the process does not exit on its own, and that is correct.
@@ -213,7 +221,7 @@ const GROUP_BY_NAME = {
   sealitaire: 'Servers',
   // The three Dock buttons, written into ~/Applications the way `film:setup`
   // does. One generator, one row of tools/games.mjs each — see game-app.mjs.
-  'sealitaire:app': 'Servers', 'ball:app': 'Servers',
+  'sealitaire:app': 'Servers', 'ball:app': 'Servers', 'wetris:app': 'Servers',
   // Blubberball's door. It starts a dev server only if there is not one
   // already, so it is the same kind of thing as the two viewers above even
   // though what it opens is a browser tab.
@@ -251,6 +259,23 @@ const GROUP_BY_NAME = {
   // WRITES; it sits beside the report it is the second half of.
   'sealitaire:pull:apply': 'Audits',
   'sealitaire:push': 'Publish',
+  // WETRIS, the third Rive CLI project — a stacker on sealitaire's water.
+  // The same drawers as the block above, for the same reasons.
+  wetris: 'Servers', 'wetris:shot': 'Assets',
+  'wetris:verify': 'Checks', 'wetris:test': 'Checks', 'test:wetrisshared': 'Checks', 'test:wetrissfx': 'Checks',
+  // Gathers wetris's takes out of sealitaire's bank and bakes its blip bus.
+  'wetris:sfx': 'Assets',
+  // Encodes the loop from the lossless bounce and writes its exact length.
+  'wetris:music': 'Assets',
+  // Copies sealitaire's water shaders and seal files over wetris's. It
+  // writes the project, so it sits with the other bakes.
+  'wetris:sync': 'Assets',
+  'wetris:ship': 'Publish',
+  // The editor round trip, the same shape as sealitaire's: a local .rev, the
+  // push (native, diffed, a named revision), and the pull report / apply
+  // (tools/rive-pull.mjs over native `rive pull`, merged by id).
+  'wetris:rev': 'Assets', 'wetris:push': 'Publish',
+  'wetris:pull': 'Audits', 'wetris:pull:apply': 'Audits',
   // The itch.io build and the upload of it. `itch:push` reaches butler, so it
   // sits with the other things that leave this machine.
   itch: 'Publish', 'itch:push': 'Publish',
@@ -291,10 +316,20 @@ const BLURBS = {
   'rive:watch': 'The same build, left running: every save in the .rml rebuilds the .riv.',
   'rive:rev': 'Builds, and writes a .rev beside it — the editor\'s format, which rive:pull diffs back.',
   'rive:try': 'Renders one frame of the project 60 frames in, to build/try.png. Lorem, not the real copy — see rive:preview.',
+  wetris: 'The Wetris viewer and its tuning save loop: rebuilt on every save; T opens the tuner, SAVE writes tuning.luau. Arrows move, Up/X turn, Space drops, C holds, N re-deals.',
+  'wetris:verify': 'Compiles rive/wetris (Luau type check included) and fails on any inspect problem.',
+  'wetris:test': 'The Wetris rules, headless: tests.luau against wetris.luau.',
+  'wetris:shot': 'One frame of Wetris 240 frames in, to rive/wetris/build/shot.png.',
+  'wetris:ship': 'Exports the Wetris .riv, signed, and copies it over public/wetris.riv — the file the Club seal row waits for.',
+  'wetris:rev': 'Builds rive/wetris and writes build/wetris.rev, the editor\'s format. Needs rive login; uploads nothing.',
+  'wetris:push': 'Sends rive/wetris to its Rive file (native rive push: only what changed, as a named revision). The first push creates the file in the Sealitaire project and binds it in rive.yaml.',
+  'wetris:pull': 'Reports what was changed in the Rive editor since the last push: pulls the linked file into a throwaway directory (native rive pull) and diffs it by id against the .rml, plus every script and shader byte for byte. Writes nothing.',
+  'wetris:pull:apply': 'The same pull, then writes the editor\'s attribute edits back into the .rml in place (comments and layout kept) and verifies the build, restoring the tree if it fails. Additions and deletions are reported for a person.',
   'sealitaire:ship': 'Exports the Sealitaire .riv and copies it over public/sealitaire.riv — the file the site serves. No tool file, so the words are here.',
   // THE THREE DOCK BUTTONS run one generator, so the header of game-app.mjs
   // would describe all three identically. Each says which game it writes.
   'sealitaire:app': 'Writes Sealitaire.app into ~/Applications — the table and its tuning save loop, no terminal. Icon from rive/sealitaire/build/shot.png. Re-run after moving the repo or changing node.',
+  'wetris:app': 'Writes Wetris.app into ~/Applications — the board and its tuning save loop, no terminal. Icon from rive/wetris/build/shot.png. Re-run after moving the repo or changing node.',
   'ball:app': 'Writes Blubberball.app into ~/Applications — finds or starts the game server and opens the pitch in a browser. No screenshot script, so it has no icon until you pass --icon.',
   'rive:push': 'Sends the local project up to the Rive editor. Checks the CLI is signed in first; if not, the first line says to run `rive login` in a terminal.',
   // THE SEALITAIRE CLI SCRIPTS, for the same reason: these six run

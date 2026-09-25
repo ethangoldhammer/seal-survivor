@@ -1,0 +1,2 @@
+asset,seconds,notes
+wetrisLoop,115.2,"the loop's exact length: 5529600 frames at 48000Hz, from the lossless source — NOT the MP3's, which carries encoder priming and padding. music.luau repeats the loop every this-many seconds on the audio clock. Written by tools/wetris-music.mjs."

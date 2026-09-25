@@ -52,3 +52,8 @@ source,notes
 /Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Menu_20K.mp3,
 /Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Menu_Plankton.mp3,
 /Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Menu_Terminal.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HG_Foley/HG_FLY_trashbeach_10.mp3,"Ethan's Foley, cast on the table. trashbeach_10 is the DECK'S HOVER blip, after cokehat; it replaced hg-ui-blip-mack."
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HG_Foley/HG_FLY_CokeHat_1.mp3,"UNCAST — was the deck hover before trashbeach_10. Kept in the bank so going back is one cell in sfxEvents.csv rather than a re-bake; a single-file row costs 5K and renumbers nothing (only the hg-cards DIRECTORY is positional)."
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HG_Foley/HG_FLY_Boggle.mp3,"a third take on `play`, beside hg-cards-014 and -018 rather than replacing them"
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HG_Foley/HG_FLY_Metal_Knife_Strife.mp3,"UNCAST — was `flip` for one pass; the four hg-cards takes are back there. Kept in the bank, same reason as cokehat below"
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HG_Foley/HG_FLY_Scrape_Sandlot.mp3,"`invalid` — a drop the pile refuses. Replaces hg-cards-069, which ran 1.501s and rang on long after the card had sprung back"

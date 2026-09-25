@@ -1,0 +1,13 @@
+name: wetris
+main: Wetris
+logs:
+  file: build/rive.log
+  problems: build/problems.log
+# The editor's copy: file 2609704 "wetris", in the project sealitaire and
+# blubberball push into. `npm run wetris:push` updates it (only what changed,
+# as a named revision); `npm run wetris:pull` reports editor edits and
+# `wetris:pull:apply` merges them back by id. Commit this so every push
+# updates the same file; delete fileId to make the next push create a new one.
+push:
+  fileId: 2609704
+  projectId: 316606

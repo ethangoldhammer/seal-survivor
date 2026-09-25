@@ -70,6 +70,15 @@
 //   LEAVING A BROKEN TREE. The verify used to run AFTER the write, so a merge
 //   that did not compile exited loudly with the damage already on disk. Every
 //   touched file is snapshotted first and restored if the verify fails.
+//
+// AND IT COMPARES THE FILES, not only the markup. The element diff is by id
+// over the .rml, and a script's BODY is not markup — so a project three days
+// and a whole feature ahead of its pushed copy reported "nothing changed in
+// the editor", which is true of the markup and worthless as an answer to "is
+// what is up there current". Every .luau, .wgsl, .csv and .mesh either side
+// is now compared byte for byte and the differences are named. A file the
+// remote has and we do not is the editor's; one we have and it does not is an
+// unpushed local change, which is the case that was invisible.
 // ============================================================================
 
 import { execFileSync } from 'node:child_process';
@@ -190,6 +199,73 @@ function fetchRemote(project, into) {
   const line = out.split('\n').find((l) => l.startsWith('pulled file')) ?? '';
   console.log(`rive-pull  ${line.trim() || 'downloaded the linked file'}`);
   return into;
+}
+
+// Everything the round trip carries as a FILE rather than as markup: the
+// scripts, the shaders, the tables, the baked blobs. Assets (fonts, images,
+// audio) are left out on purpose — the pull writes them into the Assets
+// panel's own flat layout rather than ours, so every one of them would read
+// as different for a reason nobody can act on.
+const FILE_EXT = ['.luau', '.wgsl', '.csv', '.mesh', '.bin'];
+
+// A BLOB COMES BACK UNDER ITS ASSET NAME, not its filename: `<BlobAsset
+// file="sfx.csv" name="sfxBank">` is `sfxBank.bin` in a pulled project. Six
+// of this project's files are blobs, so without this map every one of them
+// reads as "here only" beside a "remote only" twin and the real answer — two
+// of the six genuinely differ — is buried in its own noise.
+function blobMap(project) {
+  const out = new Map();
+  for (const name of readdirSync(project)) {
+    if (!name.endsWith('.rml')) continue;
+    const text = readFileSync(join(project, name), 'utf8');
+    for (const m of text.matchAll(/<BlobAsset\b[^>]*>/g)) {
+      const file = /\bfile="([^"]+)"/.exec(m[0])?.[1];
+      const asset = /\bname="([^"]+)"/.exec(m[0])?.[1];
+      if (file && asset) out.set(file, `${asset}.bin`);
+    }
+  }
+  return out;
+}
+
+function fileDelta(project, remote) {
+  const listing = (dir) => {
+    const out = new Map();
+    for (const name of readdirSync(dir)) {
+      if (!FILE_EXT.some((e) => name.endsWith(e))) continue;
+      out.set(name, readFileSync(join(dir, name)));
+    }
+    return out;
+  };
+  const mine = listing(project);
+  const theirs = listing(remote);
+  const blobs = blobMap(project);
+  // Fold each blob's two names into one comparison, under OUR name.
+  for (const [file, asBin] of blobs) {
+    if (file === asBin || !theirs.has(asBin)) continue;
+    if (!theirs.has(file)) theirs.set(file, theirs.get(asBin));
+    theirs.delete(asBin);
+  }
+  // A TABLE THE BAKERS READ IS NOT PART OF THE FILE. pool.csv, rigs.csv,
+  // sfxPacks.csv, sfxFx.csv and musicLoops.csv are inputs to
+  // `npm run sealitaire:fish|sfx|music` — they produce the blobs that DO
+  // travel, and the push has never carried them. Reported as "here only"
+  // they are five permanent false alarms, and a report that always cries is
+  // one nobody reads. Anything a <BlobAsset> declares is the real thing.
+  const carried = new Set(blobs.keys());
+  const local = [];
+  for (const name of mine.keys()) {
+    if (name.endsWith('.csv') && !carried.has(name)) local.push(name);
+  }
+  for (const name of local) mine.delete(name);
+  const onlyMine = [];
+  const onlyTheirs = [];
+  const differ = [];
+  for (const [name, bytes] of mine) {
+    if (!theirs.has(name)) onlyMine.push(name);
+    else if (!bytes.equals(theirs.get(name))) differ.push(name);
+  }
+  for (const name of theirs.keys()) if (!mine.has(name)) onlyTheirs.push(name);
+  return { onlyMine: onlyMine.sort(), onlyTheirs: onlyTheirs.sort(), differ: differ.sort(), local: local.sort() };
 }
 
 function rive(args, cwd) {
@@ -344,6 +420,12 @@ try {
   //   project — but the editor stores them as ShaderAssets with ids, so they
   //   are always "added". A ShaderAsset whose name is a .wgsl on disk is ours.
   const wgsl = new Set(readdirSync(project).filter((n) => n.endsWith('.wgsl')).map((n) => n.slice(0, -5)));
+  // Scripts are scanned in from `.luau` exactly as shaders are from `.wgsl`:
+  // no markup here, a ScriptAsset with an id there. Pushing a NEW script
+  // therefore reports it back as an addition to place by hand, which is the
+  // one thing this tool refuses to do and the last thing anybody wants for a
+  // file they just sent up themselves.
+  const luau = new Set(readdirSync(project).filter((n) => n.endsWith('.luau')).map((n) => n.slice(0, -5)));
   const sig = (el) => `${el.type}\u0000${el.name ?? ''}`;
   const count = (ids, src) => { const m = new Map(); for (const id of ids) { const k = sig(src.get(id)); m.set(k, (m.get(k) ?? 0) + 1); } return m; };
   const addedBy = count(added, theirs);
@@ -353,6 +435,7 @@ try {
   added = added.filter((id) => {
     const el = theirs.get(id);
     if (el.type === 'ShaderAsset' && wgsl.has(el.name)) { scanned.push(id); return false; }
+    if (el.type === 'ScriptAsset' && luau.has(el.name)) { scanned.push(id); return false; }
     const k = sig(el);
     if (addedBy.get(k) === 1 && removedBy.get(k) === 1) { renumbered.push(el); return false; }
     return true;
@@ -387,17 +470,40 @@ try {
   }
   for (let i = changed.length - 1; i >= 0; i--) if (!changed[i].delta.length) changed.splice(i, 1);
 
+  // THE FILES, before the elements: a stale push is the likeliest thing a
+  // pull is being asked about, and it is invisible in the markup.
+  const fileSides = fileDelta(project, fresh);
   console.log(`rive-pull  ${relative(process.cwd(), project)}  ←  ${rev ? relative(process.cwd(), rev) : `the linked file (${pushedFileId(project)})`}`);
   console.log(`  ${mine.size} elements here, ${theirs.size} in the export\n`);
 
   const housekeeping = [];
   if (renumbered.length) housekeeping.push(`${renumbered.length} renumbered by the push`);
-  if (scanned.length) housekeeping.push(`${scanned.length} shader(s) the build scans in`);
+  if (scanned.length) housekeeping.push(`${scanned.length} script(s)/shader(s) the build scans in`);
   if (housekeeping.length) console.log(`  (ignoring ${housekeeping.join(', ')} — same elements, nothing to do)\n`);
 
+  // THE FILE REPORT, and it comes before the elements because it is the only
+  // thing here that can tell a stale push from a quiet one.
+  const fileDiffs = fileSides.onlyMine.length + fileSides.onlyTheirs.length + fileSides.differ.length;
+  if (fileDiffs > 0) {
+    console.log(`  ${fileDiffs} file(s) differ from the remote:`);
+    for (const n of fileSides.onlyMine) console.log(`      ${n.padEnd(22)} HERE ONLY — not in the pushed file`);
+    for (const n of fileSides.differ) console.log(`      ${n.padEnd(22)} differs`);
+    for (const n of fileSides.onlyTheirs) console.log(`      ${n.padEnd(22)} in the remote only — deleted here, or never pulled`);
+    if (fileSides.onlyMine.length > 0 || fileSides.differ.length > 0) {
+      console.log('  (here-only or differing is an UNPUSHED change: `rive push` sends it)');
+    }
+    console.log('');
+  } else {
+    console.log('  every script, shader and table matches the remote byte for byte\n');
+  }
+  if (fileSides.local.length) {
+    console.log(`  (${fileSides.local.length} baker input(s) the file never carries: ${fileSides.local.join(', ')})\n`);
+  }
+
   if (!added.length && !removed.length && !changed.length && !dangling.length) {
-    console.log('  nothing changed in the editor — the .rml already says what the remote does');
-    process.exit(0);
+    const tail = fileDiffs > 0 ? ', but the files above do not match' : '';
+    console.log(`  no element changed in the editor — the .rml already says what the remote does${tail}`);
+    process.exit(fileDiffs > 0 ? 1 : 0);
   }
 
   for (const { id, el, delta } of changed) {

@@ -95,16 +95,6 @@ export const COPY_COLUMNS = {
   // to do to earn it. Prose, read on a tile or a toast.
   'unlocks.csv': ['label'],
 
-  // ---- WORDBOARD ----------------------------------------------------------
-  // This file is shared with ~/Projects/wordboard, which is where the rows
-  // below live; they are listed here too so the two copies stay byte-identical
-  // and a fix really can be dropped into either one. A filename that is not in
-  // a repo simply never comes up.
-  //
-  // The whole of that project's player-facing prose: the name on a card's face
-  // and the line under it. `effect`, `letter` and `arg` are joins rather than
-  // words, so they are not here.
-  'cards.csv': ['name', 'desc'],
 };
 
 // Is this column one a player reads? Accepts a bare name or a repo path.

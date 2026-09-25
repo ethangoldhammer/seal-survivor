@@ -1,0 +1,18 @@
+event,takes,gain,delay,minGap,ladder,bus,send,notes
+move,hg-ui-blip-oil-a|hg-ui-blip-owl|hg-ui-blip-arky|hg-ui-blip-blue|hg-ui-blip-dove|hg-ui-blip-snappy|hg-ui-blip-woody|hg-ui-blip-sparky,0.13,0,0.03,h,blip,0.6,"the piece stepped sideways. Sealitaire's card-hover blips — single transient pops, the eight shortest-feeling of its twenty — pitched by COLUMN on the hover ladder (h-2 at the left wall .. h2 at the right), so walking the piece plays a little scale. minGap 0.03: a held key repeats fast."
+rotate,eg-flickplop-01|eg-flickplop-04|eg-flickplop-07|eg-flickplop-10|eg-flickplop-13|eg-flickplop-16,0.3,0,0.02,p,knock,0.8,"the piece turned. The tank-glass flick-plops, a step UP for clockwise and a step down for counter, so the two directions are told apart by ear."
+softDrop,hg-ui-blip-click-discus|hg-ui-blip-menu-tchak,0.05,0,0.05,h,blip,0.3,"one row of soft drop. Barely there — it fires every twentieth of a second while held — and pitched DOWN as the piece gets deeper."
+hold,hg-ui-blip-noah,0.35,0,0,,blip,0.8,"the piece went into the hold (or came out of it). Sealitaire's foundation-send blip."
+lock,eg-flickplop-02|eg-flickplop-05|eg-flickplop-08|eg-flickplop-11|eg-flickplop-14,0.35,0,0,p,knock,1,"a piece settled into the stack on its own. A flick-plop a step low: a body coming to rest."
+hardDrop,eg-flickplop-03|eg-flickplop-06|eg-flickplop-09|eg-flickplop-12|eg-flickplop-15,0.55,0,0,p,knock,1.3,"a hard drop landed. The lowest rung and the most bus: the slap the foam shows. Level scales with how far it fell."
+clear,hg-ui-blip-menu-bic|hg-ui-blip-menu-plankton|hg-ui-blip-menu-rooster|hg-ui-blip-froggy,0.3,0,0,h,blip,1.1,"one cleared row. Played once per row, 70ms apart and a rung higher each, so a double is two notes rising and a four-line clear is a run up the ladder."
+tetris,hg-ui-blip-menu-spat,0.7,0.28,0,,blip,1.4,"four lines at once, on top of the four `clear` notes — Sealitaire's foundation blip, delayed to land after the run."
+gameOver,eg-flickplop-02|eg-flickplop-06|eg-flickplop-10,0.5,0,0,p,knock,1.5,"the well topped out. The lowest flick-plop, the most bus."
+newGame,hg-ui-blip-menu-20k,0.3,0,0,,blip,0.6,"a fresh game dealt (N, or a tap on a finished well)."
+reactSpin,seal-boost-01-distant|seal-boost-02-distant|seal-boost-03-distant|seal-boost-04-distant,0.15,0,0,,,0,"the seal's celebration on a line clear — Sealitaire's react voices, already 'distant' (a room and the water baked in), so they take no bus of their own. The variant name is react.luau's."
+reactBarrel,seal-boost-02-distant|seal-boost-04-distant,0.15,0,0,,,0,a barrel roll.
+reactFlip,seal-breach-01-distant|seal-56-distant,0.18,0,0,,,0,"a somersault — always the four-line clear's."
+reactClap,seal-wa-01-distant|seal-wa-02-distant,0.15,0,0,,,0,flippers brought together three times.
+reactBark,seal-07-distant|seal-13-distant|seal-call-02-distant|eliarf-boost-01-distant,0.15,0,0,,,0,the bark clip.
+reactRoll,seal-boost-03-distant|seal-56-distant,0.13,0,0,,,0,the roll clip.
+reactBall,seal-boost-01-distant|seal-13-distant,0.15,0,0,,,0,the ball clip.

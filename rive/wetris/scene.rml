@@ -1,0 +1,403 @@
+<Rive version="1" kind="fragment">
+
+    <!-- =========================================================================
+         WETRIS — a falling-block stacker, played on sealitaire's water.
+
+         A STUB in sealitaire's shape: one fill-sized artboard, one
+         ScriptedLayout (board.luau) that owns every pixel and every input,
+         the rules pure in wetris.luau and proved by tests.luau.
+
+         The water under it is sealitaire's: vortex / goo / foam / surface are
+         symlinks into rive/sealitaire, found by the build's directory scan
+         like any shader. crt.wgsl is wetris's own compositor with
+         sealitaire's screen treatment. See board.luau's header.
+
+         Hierarchy order: FIRST child draws on TOP.
+         ========================================================================= -->
+
+    <Artboard defaultStateMachineId="0:4" viewModelId="0:300" viewModelInstanceId="0:310"
+              clip="true" x="0" y="0" width="1600" height="1000" styleId="0:3"
+              name="Wetris" id="0:2">
+        <Fill name="Background" id="0:6">
+            <SolidColor colorValue="FF07182B" name="Color" id="0:7"/>
+        </Fill>
+        <LayoutComponentStyle name="Artboard Style" id="0:3"/>
+
+        <LayoutComponent width="1600" height="1000" styleId="0:11" name="Root" id="0:10">
+            <LayoutComponentStyle layoutWidthScaleType="fill" layoutHeightScaleType="fill" name="Root Style" id="0:11"/>
+            <ScriptedLayout scriptAssetId="0:401" name="Board" id="0:12">
+                <ScriptInputArtboard artboardId="0:500" name="hud" id="0:14"/>
+                <ScriptInputArtboard artboardId="1:7000" name="tunerRow" id="0:18"/>
+                <ScriptInputArtboard artboardId="1:7100" name="tunerHead" id="0:19"/>
+                <FocusData id="0:15"/>
+            </ScriptedLayout>
+            <!-- The editor's, added on its first open; kept so a pull stops
+                 reporting it. -->
+            <ComponentOrigin id="1:9105"/>
+        </LayoutComponent>
+
+        <StateMachine name="State Machine 1" id="0:4">
+            <StateMachineLayer name="Layer 1" id="0:5">
+                <AnyState x="300" y="0" id="0:8"/>
+                <ExitState x="400" y="0" id="0:9"/>
+                <EntryState x="0" y="0" id="0:16"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- =========================================================================
+         THE READOUT — the score, the level in its ring, the lines, bound to
+         the Board view model; an artboard of its own so board.luau can
+         instance it into the scene canvas (through the CRT with everything
+         else), scale it with the screen, and pop it on a clear. No word labels
+         (every word a player reads is Ethan's): the level is told apart by its
+         ring and its gold, the lines by the bar board.luau draws under the
+         score toward the next level.
+         ========================================================================= -->
+    <Artboard isComponent="true" defaultStateMachineId="0:504" viewModelId="0:300" viewModelInstanceId="0:310"
+              x="0" y="1100" width="340" height="110" styleId="0:501" name="Readout" id="0:500">
+        <LayoutComponentStyle name="Style" id="0:501"/>
+        <!-- THE SCORE, big, in the title face with a feathered glow. board.luau
+             counts it up and pops the whole readout on a clear. -->
+        <Text x="80" y="0" sizingValue="autoWidth" name="Score" id="0:20">
+            <TextStylePaint fontSize="55" fontAssetId="1:9111" familyName="Abril Fatface" styleName="Regular" name="Big" id="0:21">
+                <Stroke thickness="4" name="Glow" id="0:26"><SolidColor colorValue="FFF6F1E7" name="C" id="0:27"/><Feather strength="16" name="F" id="0:28"/></Stroke>
+                <Fill name="Fill" id="0:22"><SolidColor colorValue="FFF6F1E7" name="C" id="0:23"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:21" text="0" name="Run" id="0:24">
+                <DataBindContext sourcePathIds="0:300-0:301" propertyKey="268" id="0:25"/>
+            </TextValueRun>
+        </Text>
+        <!-- Total lines, small, after the level bar board.luau draws under the score. -->
+        <Text x="244" y="78" sizingValue="autoWidth" name="Lines" hidden="true" id="0:30">
+            <TextStylePaint fontSize="20" letterSpacing="0.06" fontAssetId="1:9111" familyName="Abril Fatface" styleName="Regular" name="Small" id="0:31">
+                <Stroke thickness="1.5" name="Glow" id="0:36"><SolidColor colorValue="FF7FB6E8" name="C" id="0:37"/><Feather strength="5" name="F" id="0:38"/></Stroke>
+                <Fill name="Fill" id="0:32"><SolidColor colorValue="FFB9DCF6" name="C" id="0:33"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:31" text="Lines " name="Run" id="0:34"/>
+            <TextValueRun styleId="0:31" text="0" name="Run 2" id="1:9118">
+                <DataBindContext sourcePathIds="0:300-0:302" propertyKey="268" id="1:9119"/>
+            </TextValueRun>
+        </Text>
+        <!-- THE LEVEL, a number in a ring — grouped in the editor so the pair
+             scales and moves as one. -->
+        <Node x="36" y="37" scaleX="0.83999997" scaleY="0.83999997" id="1:9110">
+            <Text x="0" y="0" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Level" id="0:40">
+                <TextStylePaint fontSize="52" fontAssetId="1:9111" familyName="Abril Fatface" styleName="Regular" name="Mid" id="0:41">
+                    <Stroke thickness="2.5" name="Glow" id="0:46"><SolidColor colorValue="FFFFE296" name="C" id="0:47"/><Feather strength="10" name="F" id="0:48"/></Stroke>
+                    <Fill name="Fill" id="0:42"><SolidColor colorValue="FF66C0F7" name="C" id="0:43"/></Fill>
+                </TextStylePaint>
+                <TextValueRun styleId="0:41" text="1" name="Run" id="0:44">
+                    <DataBindContext sourcePathIds="0:300-0:303" propertyKey="268" id="0:45"/>
+                </TextValueRun>
+            </Text>
+            <Shape x="0" y="0" name="Level Ring" id="0:50">
+                <Ellipse width="64" height="64" originX="0.5" originY="0.5" name="P" id="0:51"/>
+                <Stroke thickness="1" name="Ring" id="0:52"><SolidColor colorValue="CCFFFFFF" name="C" id="0:53"/><Feather strength="0" name="F" id="0:54"/></Stroke>
+                <Fill name="Fill" id="0:55"><SolidColor colorValue="0DFFFFFF" name="C" id="0:56"/></Fill>
+            </Shape>
+        </Node>
+
+        <StateMachine name="State Machine 1" id="0:504">
+            <StateMachineLayer name="Layer 1" id="0:505">
+                <AnyState x="300" y="0" id="0:506"/>
+                <ExitState x="400" y="0" id="0:507"/>
+                <EntryState x="0" y="0" id="0:508"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+    <ComponentAsset artboardId="0:500" name="Readout" id="0:509"/>
+
+    <ViewModel defaultInstanceId="0:310" name="Board" id="0:300">
+        <ViewModelPropertyString name="score" id="0:301"/>
+        <ViewModelPropertyString name="lines" id="0:302"/>
+        <ViewModelPropertyString name="level" id="0:303"/>
+        <!-- The lab, sealitaire's trick: `rive rive/wetris --data=lab=clear`
+             stages a board for a screenshot (board.luau, stageLab). Blank in
+             play. -->
+        <ViewModelPropertyString name="lab" id="0:305"/>
+        <ViewModelInstance exports="true" name="Instance" id="0:310">
+            <ViewModelInstanceString propertyValue="1298479218" viewModelPropertyId="0:301" id="0:311"/>
+            <ViewModelInstanceString propertyValue="0" viewModelPropertyId="0:302" id="0:312"/>
+            <ViewModelInstanceString propertyValue="6" viewModelPropertyId="0:303" id="0:313"/>
+            <ViewModelInstanceString propertyValue="" viewModelPropertyId="0:305" id="0:315"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+    <!-- Inter is 0:400 because tuner.rml (sealitaire's, shared byte for byte)
+         names its font by that id. -->
+    <FontAsset file="fonts/Inter.ttf" name="Inter" id="0:400"/>
+    <FontAsset file="fonts/Abril Fatface.ttf" name="Abril Fatface" id="0:420"/>
+    <!-- Ethan's, from the editor (2026-09-25): Water Brush is the readout's
+         face now; Pixelify Sans came in with it and is not used yet. -->
+    <FontAsset file="fonts/Water Brush.ttf" isCustom="false" assetId="4230788" name="Water Brush" id="1:9111"/>
+    <FontAsset file="fonts/Pixelify Sans.ttf" isCustom="false" assetId="4229865" name="Pixelify Sans" id="1:9106"/>
+    <!-- The seal's baked rig and clips (sealitaire's, test:wetrisshared). A
+         blob DOES need this line, whatever sealitaire's asset comment says:
+         without it the build leaves the file out and context:blob('seal') is
+         nil. Shaders are the ones the directory scan finds on its own. -->
+    <BlobAsset file="seal.mesh" name="seal" id="0:410"/>
+    <!-- Which take plays for which event (sound.luau; tools/wetris-sfx.mjs gathers the files). -->
+    <BlobAsset file="sfxEvents.csv" name="sfxEvents" id="0:416"/>
+    <!-- THE MUSIC: the loop (tools/wetris-music.mjs encodes it from the lossless
+         bounce) and its exact length, which music.luau schedules repeats by. -->
+    <AudioAsset file="music/wetris.mp3" name="wetrisLoop" id="0:430"/>
+    <BlobAsset file="musicLoop.csv" name="musicLoop" id="0:431"/>
+
+    <ScriptAsset file="wetris.luau" isModule="true" name="wetris" id="0:402"/>
+    <ScriptAsset file="puddle.luau" isModule="true" name="puddle" id="0:404"/>
+    <ScriptAsset file="ink.luau" isModule="true" name="ink" id="0:413"/>
+    <ScriptAsset file="knock.luau" isModule="true" name="knock" id="0:417"/>
+    <ScriptAsset file="drips.luau" isModule="true" name="drips" id="0:414"/>
+    <ScriptAsset file="tiles.luau" isModule="true" name="tiles" id="0:415"/>
+    <!-- The seal: react, motion and puppet before swimmer, which requires them.
+         puppet and react are sealitaire's (test:wetrisshared); motion is ours. -->
+    <ScriptAsset file="tuning.luau" isModule="true" name="tuning" id="0:411"/>
+    <ScriptAsset file="tuner.luau" isModule="true" name="tuner" id="0:412"/>
+    <ScriptAsset file="sound.luau" isModule="true" name="sound" id="0:418"/>
+    <ScriptAsset file="music.luau" isModule="true" name="music" id="0:419"/>
+    <ScriptAsset file="react.luau" isModule="true" name="react" id="0:406"/>
+    <ScriptAsset file="motion.luau" isModule="true" name="motion" id="0:407"/>
+    <ScriptAsset file="puppet.luau" isModule="true" name="puppet" id="0:408"/>
+    <ScriptAsset file="cubes.luau" isModule="true" name="cubes" id="0:440"/>
+    <ScriptAsset file="swimmer.luau" isModule="true" name="swimmer" id="0:409"/>
+    <ScriptAsset file="board.luau" name="board" id="0:401"/>
+    <ScriptAsset file="tests.luau" name="tests" id="0:403"/>
+    <!-- SFX: generated by tools/wetris-sfx.mjs from sfxEvents.csv; do not hand-edit -->
+    <AudioAsset file="sfx/blipbus-p-1-c0.flac" name="blipbus-p-1-c0" id="0:3000"/>
+    <AudioAsset file="sfx/blipbus-p-1-c1.flac" name="blipbus-p-1-c1" id="0:3001"/>
+    <AudioAsset file="sfx/blipbus-p-1-c2.flac" name="blipbus-p-1-c2" id="0:3002"/>
+    <AudioAsset file="sfx/blipbus-p-1-c3.flac" name="blipbus-p-1-c3" id="0:3003"/>
+    <AudioAsset file="sfx/blipbus-p-2-c0.flac" name="blipbus-p-2-c0" id="0:3004"/>
+    <AudioAsset file="sfx/blipbus-p-2-c1.flac" name="blipbus-p-2-c1" id="0:3005"/>
+    <AudioAsset file="sfx/blipbus-p-2-c2.flac" name="blipbus-p-2-c2" id="0:3006"/>
+    <AudioAsset file="sfx/blipbus-p-2-c3.flac" name="blipbus-p-2-c3" id="0:3007"/>
+    <AudioAsset file="sfx/blipbus-p0-c0.flac" name="blipbus-p0-c0" id="0:3008"/>
+    <AudioAsset file="sfx/blipbus-p0-c1.flac" name="blipbus-p0-c1" id="0:3009"/>
+    <AudioAsset file="sfx/blipbus-p0-c2.flac" name="blipbus-p0-c2" id="0:3010"/>
+    <AudioAsset file="sfx/blipbus-p0-c3.flac" name="blipbus-p0-c3" id="0:3011"/>
+    <AudioAsset file="sfx/blipbus-p1-c0.flac" name="blipbus-p1-c0" id="0:3012"/>
+    <AudioAsset file="sfx/blipbus-p1-c1.flac" name="blipbus-p1-c1" id="0:3013"/>
+    <AudioAsset file="sfx/blipbus-p1-c2.flac" name="blipbus-p1-c2" id="0:3014"/>
+    <AudioAsset file="sfx/blipbus-p1-c3.flac" name="blipbus-p1-c3" id="0:3015"/>
+    <AudioAsset file="sfx/blipbus-p2-c0.flac" name="blipbus-p2-c0" id="0:3016"/>
+    <AudioAsset file="sfx/blipbus-p2-c1.flac" name="blipbus-p2-c1" id="0:3017"/>
+    <AudioAsset file="sfx/blipbus-p2-c2.flac" name="blipbus-p2-c2" id="0:3018"/>
+    <AudioAsset file="sfx/blipbus-p2-c3.flac" name="blipbus-p2-c3" id="0:3019"/>
+    <AudioAsset file="sfx/eg-flickplop-01.flac" name="eg-flickplop-01" id="0:3020"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p-1.flac" name="eg-flickplop-01-p-1" id="0:3021"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p-2.flac" name="eg-flickplop-01-p-2" id="0:3022"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p0.flac" name="eg-flickplop-01-p0" id="0:3023"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p1.flac" name="eg-flickplop-01-p1" id="0:3024"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p2.flac" name="eg-flickplop-01-p2" id="0:3025"/>
+    <AudioAsset file="sfx/eg-flickplop-02.flac" name="eg-flickplop-02" id="0:3026"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p-1.flac" name="eg-flickplop-02-p-1" id="0:3027"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p-2.flac" name="eg-flickplop-02-p-2" id="0:3028"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p0.flac" name="eg-flickplop-02-p0" id="0:3029"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p1.flac" name="eg-flickplop-02-p1" id="0:3030"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p2.flac" name="eg-flickplop-02-p2" id="0:3031"/>
+    <AudioAsset file="sfx/eg-flickplop-03.flac" name="eg-flickplop-03" id="0:3032"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p-1.flac" name="eg-flickplop-03-p-1" id="0:3033"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p-2.flac" name="eg-flickplop-03-p-2" id="0:3034"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p0.flac" name="eg-flickplop-03-p0" id="0:3035"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p1.flac" name="eg-flickplop-03-p1" id="0:3036"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p2.flac" name="eg-flickplop-03-p2" id="0:3037"/>
+    <AudioAsset file="sfx/eg-flickplop-04.flac" name="eg-flickplop-04" id="0:3038"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p-1.flac" name="eg-flickplop-04-p-1" id="0:3039"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p-2.flac" name="eg-flickplop-04-p-2" id="0:3040"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p0.flac" name="eg-flickplop-04-p0" id="0:3041"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p1.flac" name="eg-flickplop-04-p1" id="0:3042"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p2.flac" name="eg-flickplop-04-p2" id="0:3043"/>
+    <AudioAsset file="sfx/eg-flickplop-05.flac" name="eg-flickplop-05" id="0:3044"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p-1.flac" name="eg-flickplop-05-p-1" id="0:3045"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p-2.flac" name="eg-flickplop-05-p-2" id="0:3046"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p0.flac" name="eg-flickplop-05-p0" id="0:3047"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p1.flac" name="eg-flickplop-05-p1" id="0:3048"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p2.flac" name="eg-flickplop-05-p2" id="0:3049"/>
+    <AudioAsset file="sfx/eg-flickplop-06.flac" name="eg-flickplop-06" id="0:3050"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p-1.flac" name="eg-flickplop-06-p-1" id="0:3051"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p-2.flac" name="eg-flickplop-06-p-2" id="0:3052"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p0.flac" name="eg-flickplop-06-p0" id="0:3053"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p1.flac" name="eg-flickplop-06-p1" id="0:3054"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p2.flac" name="eg-flickplop-06-p2" id="0:3055"/>
+    <AudioAsset file="sfx/eg-flickplop-07.flac" name="eg-flickplop-07" id="0:3056"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p-1.flac" name="eg-flickplop-07-p-1" id="0:3057"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p-2.flac" name="eg-flickplop-07-p-2" id="0:3058"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p0.flac" name="eg-flickplop-07-p0" id="0:3059"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p1.flac" name="eg-flickplop-07-p1" id="0:3060"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p2.flac" name="eg-flickplop-07-p2" id="0:3061"/>
+    <AudioAsset file="sfx/eg-flickplop-08.flac" name="eg-flickplop-08" id="0:3062"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p-1.flac" name="eg-flickplop-08-p-1" id="0:3063"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p-2.flac" name="eg-flickplop-08-p-2" id="0:3064"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p0.flac" name="eg-flickplop-08-p0" id="0:3065"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p1.flac" name="eg-flickplop-08-p1" id="0:3066"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p2.flac" name="eg-flickplop-08-p2" id="0:3067"/>
+    <AudioAsset file="sfx/eg-flickplop-09.flac" name="eg-flickplop-09" id="0:3068"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p-1.flac" name="eg-flickplop-09-p-1" id="0:3069"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p-2.flac" name="eg-flickplop-09-p-2" id="0:3070"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p0.flac" name="eg-flickplop-09-p0" id="0:3071"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p1.flac" name="eg-flickplop-09-p1" id="0:3072"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p2.flac" name="eg-flickplop-09-p2" id="0:3073"/>
+    <AudioAsset file="sfx/eg-flickplop-10.flac" name="eg-flickplop-10" id="0:3074"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p-1.flac" name="eg-flickplop-10-p-1" id="0:3075"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p-2.flac" name="eg-flickplop-10-p-2" id="0:3076"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p0.flac" name="eg-flickplop-10-p0" id="0:3077"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p1.flac" name="eg-flickplop-10-p1" id="0:3078"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p2.flac" name="eg-flickplop-10-p2" id="0:3079"/>
+    <AudioAsset file="sfx/eg-flickplop-11.flac" name="eg-flickplop-11" id="0:3080"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p-1.flac" name="eg-flickplop-11-p-1" id="0:3081"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p-2.flac" name="eg-flickplop-11-p-2" id="0:3082"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p0.flac" name="eg-flickplop-11-p0" id="0:3083"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p1.flac" name="eg-flickplop-11-p1" id="0:3084"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p2.flac" name="eg-flickplop-11-p2" id="0:3085"/>
+    <AudioAsset file="sfx/eg-flickplop-12.flac" name="eg-flickplop-12" id="0:3086"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p-1.flac" name="eg-flickplop-12-p-1" id="0:3087"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p-2.flac" name="eg-flickplop-12-p-2" id="0:3088"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p0.flac" name="eg-flickplop-12-p0" id="0:3089"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p1.flac" name="eg-flickplop-12-p1" id="0:3090"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p2.flac" name="eg-flickplop-12-p2" id="0:3091"/>
+    <AudioAsset file="sfx/eg-flickplop-13.flac" name="eg-flickplop-13" id="0:3092"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p-1.flac" name="eg-flickplop-13-p-1" id="0:3093"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p-2.flac" name="eg-flickplop-13-p-2" id="0:3094"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p0.flac" name="eg-flickplop-13-p0" id="0:3095"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p1.flac" name="eg-flickplop-13-p1" id="0:3096"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p2.flac" name="eg-flickplop-13-p2" id="0:3097"/>
+    <AudioAsset file="sfx/eg-flickplop-14.flac" name="eg-flickplop-14" id="0:3098"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p-1.flac" name="eg-flickplop-14-p-1" id="0:3099"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p-2.flac" name="eg-flickplop-14-p-2" id="0:3100"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p0.flac" name="eg-flickplop-14-p0" id="0:3101"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p1.flac" name="eg-flickplop-14-p1" id="0:3102"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p2.flac" name="eg-flickplop-14-p2" id="0:3103"/>
+    <AudioAsset file="sfx/eg-flickplop-15.flac" name="eg-flickplop-15" id="0:3104"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p-1.flac" name="eg-flickplop-15-p-1" id="0:3105"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p-2.flac" name="eg-flickplop-15-p-2" id="0:3106"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p0.flac" name="eg-flickplop-15-p0" id="0:3107"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p1.flac" name="eg-flickplop-15-p1" id="0:3108"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p2.flac" name="eg-flickplop-15-p2" id="0:3109"/>
+    <AudioAsset file="sfx/eg-flickplop-16.flac" name="eg-flickplop-16" id="0:3110"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p-1.flac" name="eg-flickplop-16-p-1" id="0:3111"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p-2.flac" name="eg-flickplop-16-p-2" id="0:3112"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p0.flac" name="eg-flickplop-16-p0" id="0:3113"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p1.flac" name="eg-flickplop-16-p1" id="0:3114"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p2.flac" name="eg-flickplop-16-p2" id="0:3115"/>
+    <AudioAsset file="sfx/eliarf-boost-01-distant.flac" name="eliarf-boost-01-distant" id="0:3116"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky.flac" name="hg-ui-blip-arky" id="0:3117"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h-1.flac" name="hg-ui-blip-arky-h-1" id="0:3118"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h-2.flac" name="hg-ui-blip-arky-h-2" id="0:3119"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h0.flac" name="hg-ui-blip-arky-h0" id="0:3120"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h1.flac" name="hg-ui-blip-arky-h1" id="0:3121"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h2.flac" name="hg-ui-blip-arky-h2" id="0:3122"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue.flac" name="hg-ui-blip-blue" id="0:3123"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h-1.flac" name="hg-ui-blip-blue-h-1" id="0:3124"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h-2.flac" name="hg-ui-blip-blue-h-2" id="0:3125"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h0.flac" name="hg-ui-blip-blue-h0" id="0:3126"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h1.flac" name="hg-ui-blip-blue-h1" id="0:3127"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h2.flac" name="hg-ui-blip-blue-h2" id="0:3128"/>
+    <AudioAsset file="sfx/hg-ui-blip-click-discus.flac" name="hg-ui-blip-click-discus" id="0:3129"/>
+    <AudioAsset file="sfx/hg-ui-blip-click-discus-h-1.flac" name="hg-ui-blip-click-discus-h-1" id="0:3130"/>
+    <AudioAsset file="sfx/hg-ui-blip-click-discus-h-2.flac" name="hg-ui-blip-click-discus-h-2" id="0:3131"/>
+    <AudioAsset file="sfx/hg-ui-blip-click-discus-h0.flac" name="hg-ui-blip-click-discus-h0" id="0:3132"/>
+    <AudioAsset file="sfx/hg-ui-blip-click-discus-h1.flac" name="hg-ui-blip-click-discus-h1" id="0:3133"/>
+    <AudioAsset file="sfx/hg-ui-blip-click-discus-h2.flac" name="hg-ui-blip-click-discus-h2" id="0:3134"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove.flac" name="hg-ui-blip-dove" id="0:3135"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h-1.flac" name="hg-ui-blip-dove-h-1" id="0:3136"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h-2.flac" name="hg-ui-blip-dove-h-2" id="0:3137"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h0.flac" name="hg-ui-blip-dove-h0" id="0:3138"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h1.flac" name="hg-ui-blip-dove-h1" id="0:3139"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h2.flac" name="hg-ui-blip-dove-h2" id="0:3140"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy.flac" name="hg-ui-blip-froggy" id="0:3141"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h-1.flac" name="hg-ui-blip-froggy-h-1" id="0:3142"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h-2.flac" name="hg-ui-blip-froggy-h-2" id="0:3143"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h0.flac" name="hg-ui-blip-froggy-h0" id="0:3144"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h1.flac" name="hg-ui-blip-froggy-h1" id="0:3145"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h2.flac" name="hg-ui-blip-froggy-h2" id="0:3146"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-20k.flac" name="hg-ui-blip-menu-20k" id="0:3147"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-bic.flac" name="hg-ui-blip-menu-bic" id="0:3148"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-bic-h-1.flac" name="hg-ui-blip-menu-bic-h-1" id="0:3149"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-bic-h-2.flac" name="hg-ui-blip-menu-bic-h-2" id="0:3150"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-bic-h0.flac" name="hg-ui-blip-menu-bic-h0" id="0:3151"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-bic-h1.flac" name="hg-ui-blip-menu-bic-h1" id="0:3152"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-bic-h2.flac" name="hg-ui-blip-menu-bic-h2" id="0:3153"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-plankton.flac" name="hg-ui-blip-menu-plankton" id="0:3154"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-plankton-h-1.flac" name="hg-ui-blip-menu-plankton-h-1" id="0:3155"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-plankton-h-2.flac" name="hg-ui-blip-menu-plankton-h-2" id="0:3156"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-plankton-h0.flac" name="hg-ui-blip-menu-plankton-h0" id="0:3157"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-plankton-h1.flac" name="hg-ui-blip-menu-plankton-h1" id="0:3158"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-plankton-h2.flac" name="hg-ui-blip-menu-plankton-h2" id="0:3159"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-rooster.flac" name="hg-ui-blip-menu-rooster" id="0:3160"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-rooster-h-1.flac" name="hg-ui-blip-menu-rooster-h-1" id="0:3161"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-rooster-h-2.flac" name="hg-ui-blip-menu-rooster-h-2" id="0:3162"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-rooster-h0.flac" name="hg-ui-blip-menu-rooster-h0" id="0:3163"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-rooster-h1.flac" name="hg-ui-blip-menu-rooster-h1" id="0:3164"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-rooster-h2.flac" name="hg-ui-blip-menu-rooster-h2" id="0:3165"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-spat.flac" name="hg-ui-blip-menu-spat" id="0:3166"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-tchak.flac" name="hg-ui-blip-menu-tchak" id="0:3167"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-tchak-h-1.flac" name="hg-ui-blip-menu-tchak-h-1" id="0:3168"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-tchak-h-2.flac" name="hg-ui-blip-menu-tchak-h-2" id="0:3169"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-tchak-h0.flac" name="hg-ui-blip-menu-tchak-h0" id="0:3170"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-tchak-h1.flac" name="hg-ui-blip-menu-tchak-h1" id="0:3171"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-tchak-h2.flac" name="hg-ui-blip-menu-tchak-h2" id="0:3172"/>
+    <AudioAsset file="sfx/hg-ui-blip-noah.flac" name="hg-ui-blip-noah" id="0:3173"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a.flac" name="hg-ui-blip-oil-a" id="0:3174"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h-1.flac" name="hg-ui-blip-oil-a-h-1" id="0:3175"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h-2.flac" name="hg-ui-blip-oil-a-h-2" id="0:3176"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h0.flac" name="hg-ui-blip-oil-a-h0" id="0:3177"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h1.flac" name="hg-ui-blip-oil-a-h1" id="0:3178"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h2.flac" name="hg-ui-blip-oil-a-h2" id="0:3179"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl.flac" name="hg-ui-blip-owl" id="0:3180"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h-1.flac" name="hg-ui-blip-owl-h-1" id="0:3181"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h-2.flac" name="hg-ui-blip-owl-h-2" id="0:3182"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h0.flac" name="hg-ui-blip-owl-h0" id="0:3183"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h1.flac" name="hg-ui-blip-owl-h1" id="0:3184"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h2.flac" name="hg-ui-blip-owl-h2" id="0:3185"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy.flac" name="hg-ui-blip-snappy" id="0:3186"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h-1.flac" name="hg-ui-blip-snappy-h-1" id="0:3187"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h-2.flac" name="hg-ui-blip-snappy-h-2" id="0:3188"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h0.flac" name="hg-ui-blip-snappy-h0" id="0:3189"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h1.flac" name="hg-ui-blip-snappy-h1" id="0:3190"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h2.flac" name="hg-ui-blip-snappy-h2" id="0:3191"/>
+    <AudioAsset file="sfx/hg-ui-blip-sparky.flac" name="hg-ui-blip-sparky" id="0:3192"/>
+    <AudioAsset file="sfx/hg-ui-blip-sparky-h-1.flac" name="hg-ui-blip-sparky-h-1" id="0:3193"/>
+    <AudioAsset file="sfx/hg-ui-blip-sparky-h-2.flac" name="hg-ui-blip-sparky-h-2" id="0:3194"/>
+    <AudioAsset file="sfx/hg-ui-blip-sparky-h0.flac" name="hg-ui-blip-sparky-h0" id="0:3195"/>
+    <AudioAsset file="sfx/hg-ui-blip-sparky-h1.flac" name="hg-ui-blip-sparky-h1" id="0:3196"/>
+    <AudioAsset file="sfx/hg-ui-blip-sparky-h2.flac" name="hg-ui-blip-sparky-h2" id="0:3197"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody.flac" name="hg-ui-blip-woody" id="0:3198"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h-1.flac" name="hg-ui-blip-woody-h-1" id="0:3199"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h-2.flac" name="hg-ui-blip-woody-h-2" id="0:3200"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h0.flac" name="hg-ui-blip-woody-h0" id="0:3201"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h1.flac" name="hg-ui-blip-woody-h1" id="0:3202"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h2.flac" name="hg-ui-blip-woody-h2" id="0:3203"/>
+    <AudioAsset file="sfx/knockbus-p-1-c0.flac" name="knockbus-p-1-c0" id="0:3204"/>
+    <AudioAsset file="sfx/knockbus-p-1-c1.flac" name="knockbus-p-1-c1" id="0:3205"/>
+    <AudioAsset file="sfx/knockbus-p-1-c2.flac" name="knockbus-p-1-c2" id="0:3206"/>
+    <AudioAsset file="sfx/knockbus-p-1-c3.flac" name="knockbus-p-1-c3" id="0:3207"/>
+    <AudioAsset file="sfx/knockbus-p-2-c0.flac" name="knockbus-p-2-c0" id="0:3208"/>
+    <AudioAsset file="sfx/knockbus-p-2-c1.flac" name="knockbus-p-2-c1" id="0:3209"/>
+    <AudioAsset file="sfx/knockbus-p-2-c2.flac" name="knockbus-p-2-c2" id="0:3210"/>
+    <AudioAsset file="sfx/knockbus-p-2-c3.flac" name="knockbus-p-2-c3" id="0:3211"/>
+    <AudioAsset file="sfx/knockbus-p0-c0.flac" name="knockbus-p0-c0" id="0:3212"/>
+    <AudioAsset file="sfx/knockbus-p0-c1.flac" name="knockbus-p0-c1" id="0:3213"/>
+    <AudioAsset file="sfx/knockbus-p0-c2.flac" name="knockbus-p0-c2" id="0:3214"/>
+    <AudioAsset file="sfx/knockbus-p0-c3.flac" name="knockbus-p0-c3" id="0:3215"/>
+    <AudioAsset file="sfx/knockbus-p1-c0.flac" name="knockbus-p1-c0" id="0:3216"/>
+    <AudioAsset file="sfx/knockbus-p1-c1.flac" name="knockbus-p1-c1" id="0:3217"/>
+    <AudioAsset file="sfx/knockbus-p1-c2.flac" name="knockbus-p1-c2" id="0:3218"/>
+    <AudioAsset file="sfx/knockbus-p1-c3.flac" name="knockbus-p1-c3" id="0:3219"/>
+    <AudioAsset file="sfx/knockbus-p2-c0.flac" name="knockbus-p2-c0" id="0:3220"/>
+    <AudioAsset file="sfx/knockbus-p2-c1.flac" name="knockbus-p2-c1" id="0:3221"/>
+    <AudioAsset file="sfx/knockbus-p2-c2.flac" name="knockbus-p2-c2" id="0:3222"/>
+    <AudioAsset file="sfx/knockbus-p2-c3.flac" name="knockbus-p2-c3" id="0:3223"/>
+    <AudioAsset file="sfx/seal-07-distant.flac" name="seal-07-distant" id="0:3224"/>
+    <AudioAsset file="sfx/seal-13-distant.flac" name="seal-13-distant" id="0:3225"/>
+    <AudioAsset file="sfx/seal-56-distant.flac" name="seal-56-distant" id="0:3226"/>
+    <AudioAsset file="sfx/seal-boost-01-distant.flac" name="seal-boost-01-distant" id="0:3227"/>
+    <AudioAsset file="sfx/seal-boost-02-distant.flac" name="seal-boost-02-distant" id="0:3228"/>
+    <AudioAsset file="sfx/seal-boost-03-distant.flac" name="seal-boost-03-distant" id="0:3229"/>
+    <AudioAsset file="sfx/seal-boost-04-distant.flac" name="seal-boost-04-distant" id="0:3230"/>
+    <AudioAsset file="sfx/seal-breach-01-distant.flac" name="seal-breach-01-distant" id="0:3231"/>
+    <AudioAsset file="sfx/seal-call-02-distant.flac" name="seal-call-02-distant" id="0:3232"/>
+    <AudioAsset file="sfx/seal-wa-01-distant.flac" name="seal-wa-01-distant" id="0:3233"/>
+    <AudioAsset file="sfx/seal-wa-02-distant.flac" name="seal-wa-02-distant" id="0:3234"/>
+    <!-- /SFX -->
+</Rive>

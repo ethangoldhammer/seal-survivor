@@ -2592,15 +2592,18 @@ return function(): Tests
                 end
             end)
 
-            test.case('a sound that claims to be finished early is not believed', function(expect)
-                -- THE MACHINE-GUN. A handle to a sound somebody else stopped
-                -- answers `completed` yes having played nothing. At a
-                -- hundred and twenty advances a second, believing it starts
-                -- a new voice every frame.
+            test.case('a handle that always says finished does not machine-gun', function(expect)
+                -- THE HANDLE THAT LIES YES. A handle to a sound somebody
+                -- else stopped answers `completed` having played nothing.
+                -- At a hundred and twenty advances a second, believing it
+                -- starts a new voice EVERY FRAME.
                 --
-                -- The region's length is known exactly, so the clock decides
-                -- when it ran out and `completed` is only believed near the
-                -- end. Here a sound says yes immediately, forever.
+                -- It is not ignored outright, though — that was the other
+                -- bug, and the worse one: a region whose voice really does
+                -- end early then plays out the rest of its minute in
+                -- silence. So it is rate-limited by how long the voice has
+                -- played, and after enough consecutive early ends the
+                -- runtime's answer is dropped and the clock runs the loop.
                 local m = withAssets(ROWS, 2.5)
                 MUSIC.setPlayer(function(src: any): any
                     table.insert(played, tostring(src))
@@ -2611,18 +2614,94 @@ return function(): Tests
                     return snd
                 end)
                 local dt = 1 / 120
-                for _ = 1, 120 * 5 do
+                for _ = 1, 120 * 8 do
                     MUSIC.drive(m, dt, 1.0, prog(1, 0, 0, 0, 0))
                 end
-                -- Five seconds of it, and the intro has been started once.
-                expect(#played).is(1)
-                expect(played[1]).is('open')
-                -- Past the intro's ten seconds it moves on, exactly once.
-                for _ = 1, 120 * 6 do
+                -- Eight seconds. A frame-by-frame restart would be 960
+                -- plays; half-second-limited would be 16. It gave up after
+                -- seven and let the clock take over, so it is still on the
+                -- intro rather than having churned through the table.
+                expect(#played <= 8).is(true)
+                expect(#played >= 2).is(true)
+                expect(MUSIC.playingIndex()).is(1)
+                -- And once it has stopped believing, the clock still runs
+                -- the loop. The intro is ten seconds and every restart put
+                -- the clock back to zero, so it is ten MORE seconds from
+                -- here, not ten from the start.
+                local upTo = #played
+                for _ = 1, 120 * 12 do
                     MUSIC.drive(m, dt, 1.0, prog(1, 0, 0, 0, 0))
                 end
-                expect(#played).is(2)
-                expect(played[2]).is('deal')
+                expect(#played).is(upTo + 1)
+                expect(played[#played]).is('deal')
+                MUSIC.setPlayer(nil)
+            end)
+
+            test.case('a voice that ends early restarts instead of going silent', function(expect)
+                -- THE ONE THAT SHIPPED. The region stops sounding before its
+                -- length is up and the clock, which is the only thing still
+                -- running, will not reach the end for another half minute.
+                -- Half a minute of silence, and nothing anywhere says so.
+                local m = withAssets(ROWS, 2.5)
+                local dt = 1 / 120
+                MUSIC.setPlayer(function(src: any): any
+                    table.insert(played, tostring(src))
+                    local snd = { volume = 0, age = 0 }
+                    -- Plays for four seconds and then stops, whatever it
+                    -- was asked to play.
+                    function snd.completed(_self): boolean return snd.age >= 4 end
+                    function snd.stop(_self, _fade: number?) end
+                    live = snd
+                    return snd
+                end)
+                -- Drive first, then age: on the first pass `live` is still
+                -- whatever the previous case left behind, and the driver is
+                -- what replaces it with one of ours.
+                local function run(n: number)
+                    for _ = 1, n do
+                        MUSIC.drive(m, dt, 1.0, prog(1, 0, 0, 0, 0))
+                        live.age += dt
+                    end
+                end
+                run(120 * 3)
+                expect(#played).is(1)          -- still inside its four seconds
+                run(120 * 2)
+                expect(#played).is(2)          -- it stopped, so it went again
+                -- THE SAME REGION. A dropped voice must not promote the
+                -- arrangement: resuming as `deal` here would mean a glitch
+                -- can skip the intro, and higher up the ladder it would mean
+                -- a glitch takes a rung the player has not earned.
+                expect(played[2]).is('open')
+                expect(MUSIC.playingIndex()).is(1)
+                MUSIC.setPlayer(nil)
+            end)
+
+            test.case('a refused voice leaves the old region playing', function(expect)
+                -- The engine declines to start a sound — out of voices, a
+                -- decode that failed, a tab that has not been interacted
+                -- with yet. Stopping the old one first and then failing
+                -- leaves silence AND leaves the driver believing a sound it
+                -- already killed is still going, which is unrecoverable.
+                local m = withAssets(ROWS, 2.5)
+                local dt = 1 / 120
+                play(m, 11, prog(1, 0, 0, 0, 0))
+                expect(MUSIC.playingIndex()).is(2)      -- on `deal`
+                local before = live
+                local stopped = false
+                before.stop = function(_self, _fade: number?)
+                    stopped = true
+                end
+                -- From here every start is refused.
+                MUSIC.setPlayer(function(_src: any): any
+                    return nil
+                end)
+                for _ = 1, 120 * 70 do
+                    MUSIC.drive(m, dt, 1.0, prog(1, 0, 0, 0, 0))
+                end
+                -- Past the end of `deal` and well past it. The old voice was
+                -- never stopped, so what the player hears is the region it
+                -- was already in rather than nothing at all.
+                expect(stopped).is(false)
                 MUSIC.setPlayer(nil)
             end)
 
@@ -2779,6 +2858,66 @@ return function(): Tests
                     local extent = 6 * down + 12 * up + g.ch
                     expect(g.tabY - g.ch / 2 + extent <= wh[2] + 0.001).is(true)
                 end
+            end)
+
+            -- A PHONE TURNED SIDEWAYS USED TO GET THE SMALLEST CARDS ON THE
+            -- TABLE. Landscape is klondike's worst case — two rows of cards
+            -- and a column down a 390px screen — and it was being handed the
+            -- desktop's spacing, so 844x390 came out at a 40px card while the
+            -- same phone in portrait, limited by width, managed 45. The tight
+            -- budget is what fixes that, and this is the shape of the bug:
+            -- turning the phone must never cost you card.
+            test.case('landscape never gives a smaller card than portrait', function(expect)
+                for _, wh in ipairs({ { 390, 844 }, { 430, 932 }, { 360, 640 }, { 375, 667 }, { 320, 568 } }) do
+                    local tall = LAYOUT.compute(wh[1], wh[2])
+                    local wide = LAYOUT.compute(wh[2], wh[1])
+                    expect(wide.cw >= tall.cw).is(true)
+                end
+            end)
+
+            -- And it must be a real gain rather than a rounding one. These
+            -- are the numbers the old budget produced, so a change that
+            -- quietly hands the air back fails here rather than on a phone.
+            test.case('a short screen gets the tight budget', function(expect)
+                local checks = {
+                    { 844, 390, 46 },   -- a phone on its side: was 39.8
+                    { 956, 440, 54 },
+                    { 667, 375, 44 },
+                }
+                for _, c in ipairs(checks) do
+                    local g = LAYOUT.compute(c[1], c[2])
+                    expect(g.cw >= c[3]).is(true)
+                end
+                -- ...and a TALL screen keeps the loose one, because its
+                -- problem is width and the spare height is better spent on
+                -- the fan than on a card it cannot widen anyway.
+                local tall = LAYOUT.compute(390, 844)
+                local desk = LAYOUT.compute(1600, 1000)
+                expect(math.abs(desk.cw - 120) < 1e-9).is(true)
+                expect(tall.cw < tall.ch).is(true)
+            end)
+
+            -- The deal button stands IN the chrome strip, and the strip is
+            -- half its old height on a short screen. Left where it was it
+            -- would hang below the strip and over the deck.
+            test.case('the deal button stays inside the top strip', function(expect)
+                local sizes = { { 1600, 1000 }, { 844, 390 }, { 956, 440 }, { 390, 844 }, { 320, 568 }, { 2560, 1440 } }
+                for _, wh in ipairs(sizes) do
+                    local g = LAYOUT.compute(wh[1], wh[2])
+                    expect(g.button.y > 0).is(true)
+                    expect(g.button.y + g.button.h <= g.topY - g.ch / 2 + 0.001).is(true)
+                end
+            end)
+
+            -- The seal is sized against the board it swims round. Read off
+            -- the desktop's stack instead it grew by the same 1.45 the
+            -- landscape card did, and half a 390px screen is a seal.
+            test.case('the seal does not grow with the tight card', function(expect)
+                local wide = LAYOUT.compute(844, 390)
+                expect(wide.sealRef <= 390 * 1.05).is(true)
+                -- The desktop's is the one it always was: ch * 1000/168.
+                local desk = LAYOUT.compute(1600, 1000)
+                expect(math.abs(desk.sealRef - 1000) < 1e-9).is(true)
             end)
 
             -- And a column that FITS must not be squeezed: the fan is the

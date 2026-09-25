@@ -1,5 +1,5 @@
 // ============================================================================
-// THE ONE PUBLISH BUTTON.
+// THE PUBLISH BUTTONS — there are two, and each one pays a different price.
 //
 // Every other publish script in this repo is terminal-only, and that rule is
 // load-bearing: see the RISK note in hub-catalogue.mjs. A page you leave open
@@ -44,6 +44,35 @@ import { join } from 'node:path';
 // bare `ship` because the three are cut from the same passing tree — shipping
 // the site now and the phone later is how the two drift apart.
 export const SHIP_SCRIPT = 'ship:all';
+
+// ---------------------------------------------------------------------------
+// THE SECOND EXCEPTION: pushing a Rive project up to its file.
+//
+// It is a publish — it replaces what is in somebody's editor, and an unpulled
+// nudge there is gone after it — so /api/run goes on refusing it like every
+// other publish script, and it gets an endpoint of its own for the reason the
+// ship card has one.
+//
+// IT PAYS LESS THAN SHIP, AND THAT IS THE POINT OF PRICING THEM SEPARATELY.
+// Ship wants typed prose because a commit message is a decision written down
+// and because the thing it changes is the public site. A Rive push reaches
+// one file in Ethan's own workspace, and the CLI names a revision on every
+// push, so the editor can restore the previous content from its own panel.
+// Nothing is lost that cannot be got back. The price is therefore the HOLD
+// alone: enough that a stray click in a tab left open all day cannot fire it,
+// and no more than that.
+//
+// A MAP RATHER THAN A FLAG, so a second project is a line here instead of a
+// second endpoint. The value is what the button says it is pushing.
+export const RIVE_PUSH = {
+  'sealitaire:push': 'Sealitaire',
+  'rive:push': 'Blubberball',
+};
+
+/** Is `name` a Rive push the workbench will run? The endpoint's whole gate. */
+export function isRivePush(name) {
+  return Object.prototype.hasOwnProperty.call(RIVE_PUSH, name);
+}
 
 // Kept in step with ship.mjs by the test, not by hope.
 export const PROD_BRANCH = 'SealSurvivor-Main';

@@ -97,11 +97,13 @@ export async function sealitaireAvailable() {
 /**
  * Put the table on screen. Resolves once it is drawing.
  *
- * `onExit` is what Escape and the back button do — closing is the game's
- * business, not the table's, because what it goes back TO is the menu's
- * state and this file knows nothing about that.
+ * `onExit` is what the back button does — closing is the game's business, not
+ * the table's, because what it goes back TO is the menu's state and this file
+ * knows nothing about that. `onPause` is Escape, and it is a separate hook for
+ * exactly the same reason: the pause menu is the game's panel (ui/pauseMenu.js)
+ * and what its three buttons mean is main.js's to decide.
  */
-export async function showSealitaire({ parent, onExit, onProgress } = {}) {
+export async function showSealitaire({ parent, onExit, onPause, onProgress } = {}) {
   if (mounted) return mounted;
 
   const wrap = document.createElement('div');
@@ -123,7 +125,22 @@ export async function showSealitaire({ parent, onExit, onProgress } = {}) {
   // ESCAPE IS THE TABLE'S OWN, and it has to be captured: table.luau takes
   // the keyboard for its own shortcuts (N deals, T opens its tuner) through
   // the artboard's FocusData, so a bubbling listener never sees the key.
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); exit(); } };
+  //
+  // IT OPENS THE PAUSE MENU NOW rather than leaving outright. main.js's own
+  // Escape handler cannot do this job — it runs through togglePause(), which
+  // is gated on canPause(), which is false while the game is parked behind
+  // the table. So the key has to be answered here and handed out.
+  //
+  // The back button is untouched and still leaves in one press, to the Seal
+  // sports list it came from. The menu's way out goes to the MAIN menu, which
+  // is a different place: two routes, each landing where its own word says.
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    e.preventDefault();
+    if (typeof onPause === 'function') onPause();
+    else exit();
+  };
   window.addEventListener('keydown', onKey, true);
 
   // The runtime and the file in parallel — the wasm is ~2 MB and the .riv
@@ -168,8 +185,54 @@ export async function showSealitaire({ parent, onExit, onProgress } = {}) {
   const onResize = () => rive.resizeDrawingSurfaceToCanvas();
   window.addEventListener('resize', onResize);
 
-  mounted = { wrap, rive, onResize, onKey };
+  mounted = { wrap, rive, onResize, onKey, canvas };
   return mounted;
+}
+
+/**
+ * STOP THE TABLE. `rive.pause()` drops the runtime's own rAF, so the artboard
+ * stops advancing entirely — the clock stops, the water stops, the seal stops
+ * — and the last frame stays on the canvas under the menu. Nothing here has to
+ * reach into the Luau for it: not advancing IS the pause.
+ */
+export function pauseSealitaire() {
+  if (!mounted) return;
+  try { mounted.rive.pause(); } catch { /* already gone */ }
+}
+
+/** Start it again, and give the keyboard back to the artboard's FocusData. */
+export function resumeSealitaire() {
+  if (!mounted) return;
+  try {
+    mounted.rive.play();
+    // Or the table's own shortcuts (N, T, M, W, R, J/K/L) are dead on the far
+    // side of a pause: the menu took focus to a DOM button on the way in.
+    mounted.canvas.focus();
+  } catch { /* already gone */ }
+}
+
+/**
+ * Deal a fresh game.
+ *
+ * A COUNTER ON THE VIEW MODEL, bumped — scene.rml's `deal` property, watched
+ * by table.luau's advance. Not a flag, so nothing has to set it back; see the
+ * property's own note. Returns false when the binding is not there, which is
+ * a .riv older than the property: the caller resumes rather than leaving the
+ * player on a menu whose middle button did nothing.
+ *
+ * PLAY FIRST. A paused artboard does not advance, and a counter nobody reads
+ * is not a deal — so the caller resumes and the very next frame sees it.
+ */
+export function sealitaireRedeal() {
+  if (!mounted) return false;
+  try {
+    const deal = mounted.rive.viewModelInstance?.number('deal');
+    if (!deal) return false;
+    deal.value += 1;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

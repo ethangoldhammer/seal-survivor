@@ -305,10 +305,10 @@ section('Leaving a run for the menu, as main.js wires it');
 }
 
 // ---------------------------------------------------------------------------
-section('Seal sports is a panel of one working game and two promises');
+section('Seal sports is a panel of one working game and three promises');
 // The fifth hex opens a list (showSealSports). The ball game's button does
 // whatever main.js hands it — switching the versus flag and building the run
-// is main.js's job and not the panel's — and the two stubs are disabled with
+// is main.js's job and not the panel's — and the stubs are disabled with
 // "coming soon" under them, so a player can see the list's shape without
 // being able to press a button that goes nowhere.
 {
@@ -324,7 +324,7 @@ section('Seal sports is a panel of one working game and two promises');
   // backend: the row must not be there at all. A button that opened a screen
   // and then explained it could not work is worse than a list that never
   // offered it.
-  check('it lists three sports', buttons.length === 3, String(buttons.length));
+  check('it lists four sports', buttons.length === 4, String(buttons.length));
   check('...and no online row without a room server',
     !buttons.some((b) => b.dataset.sport === 'sportBallOnline'),
     buttons.map((b) => b.dataset.sport).join(' / '));
@@ -333,7 +333,7 @@ section('Seal sports is a panel of one working game and two promises');
   ball?.click();
   check('...and pressing it calls what main.js handed over', pressed === 1, `x${pressed}`);
   const stubs = buttons.filter((b) => b !== ball);
-  check('the other two are disabled', stubs.length === 2 && stubs.every((b) => b.disabled));
+  check('the other three are disabled', stubs.length === 3 && stubs.every((b) => b.disabled));
   check('...and each says it is coming', stubs.every((b) => b.querySelector('.sv-sport-soon')?.textContent.length > 0));
   check('every word on it comes from the table (no id showing through)',
     ![...panel.querySelectorAll('button, .sv-title')].some((n) => /^(sport|sealSports)/.test(n.textContent.trim())),

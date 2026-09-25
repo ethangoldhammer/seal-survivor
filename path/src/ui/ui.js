@@ -21,6 +21,7 @@ import { uiText } from '../uiTextTable.js';
 // without one. A leaf: it reads an inlined env var and touches no socket.
 import { roomsAvailable } from '../systems/online/room.js';
 import { sealitaireAvailable } from './sealitaireTable.js';
+import { wetrisAvailable } from './wetrisTable.js';
 import { isTextEntry } from './typing.js';
 // Whether there is a breath to draw at all — off in a Blubberball match, where
 // the lungs are stubbed (CONFIG.versus.oxygen). A leaf, imported for one
@@ -3704,6 +3705,7 @@ let sportsPanel = null;
 let sportsBall = null;
 let sportsBallOnline = null;
 let sportsSealitaire = null;
+let sportsWetris = null;
 // THE PANEL OPENS UNDER A FINGER THAT IS ALREADY LIFTING — see the guard in
 // buildSealSportsPanel. True from the moment it is shown until the panel has
 // seen a pointerdown of its own.
@@ -3777,6 +3779,15 @@ function buildSealSportsPanel() {
     sportsSealitaire.disabled = false;
     sportsSealitaire.querySelector('.sv-sport-soon')?.remove();
   });
+  // WETRIS, the same kind of row for the same reason: rive/wetris is a
+  // second program in sealitaire's shape (ui/wetrisTable.js), and it waits on
+  // `npm run wetris:ship` the way that one waits on its own.
+  sportsWetris = bindMenuSounds(sport('sportWetris', uiText('sportWetris'), { soon: true }));
+  wetrisAvailable().then((there) => {
+    if (!there || !sportsWetris) return;
+    sportsWetris.disabled = false;
+    sportsWetris.querySelector('.sv-sport-soon')?.remove();
+  });
 
   root.appendChild(wrap);
   bindMenuSounds(back).addEventListener('click', hideSealSports);
@@ -3834,12 +3845,15 @@ function buildSealSportsPanel() {
  * panel itself on the way into the run (closeMainMenu in main.js hides every
  * panel the menu opened), so this does not.
  */
-export function showSealSports({ onBall, onBallOnline, onSealitaire } = {}) {
+export function showSealSports({ onBall, onBallOnline, onSealitaire, onWetris } = {}) {
   if (!root) return;
   if (!sportsPanel) sportsPanel = buildSealSportsPanel();
   sportsBall.onclick = typeof onBall === 'function' ? () => onBall() : null;
   if (sportsSealitaire) {
     sportsSealitaire.onclick = typeof onSealitaire === 'function' ? () => onSealitaire() : null;
+  }
+  if (sportsWetris) {
+    sportsWetris.onclick = typeof onWetris === 'function' ? () => onWetris() : null;
   }
   if (sportsBallOnline) {
     sportsBallOnline.onclick = typeof onBallOnline === 'function' ? () => onBallOnline() : null;
