@@ -75,6 +75,8 @@ export async function showWetris({ parent, onExit, onPause } = {}) {
   // the file is downloading and there is no board to pause yet.
   const onKey = (e) => {
     if (e.key !== 'Escape') return;
+    // A rebind prompt's cancel — see sealitaireTable.js.
+    if (e.defaultPrevented) return;
     e.stopPropagation();
     e.preventDefault();
     if (mounted && typeof onPause === 'function') onPause();

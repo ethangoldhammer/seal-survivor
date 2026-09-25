@@ -1869,7 +1869,11 @@ function tablePauseFrame() {
  * @param close         unmount the table, for the way out to the main menu.
  */
 function openTablePause({ restartLabel, pause, resume, restart, close }) {
-  if (isPauseOpen()) return;
+  // ESCAPE IS A TOGGLE HERE, as it is in a run. The table's capture listener
+  // answers every Escape and stops it, so main.js's bindPauseKey — the run's
+  // way out of this menu — never hears the second press. Returning early left
+  // the menu's own "Esc to resume" a lie: the only way back was the button.
+  if (isPauseOpen()) { tablePause?.onResume(); return; }
   pause();
   const leave = () => {
     if (tablePause) cancelAnimationFrame(tablePause.raf);

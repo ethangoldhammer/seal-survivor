@@ -161,6 +161,11 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
   // is a different place: two routes, each landing where its own word says.
   const onKey = (e) => {
     if (e.key !== 'Escape') return;
+    // Already answered: the pause menu's rebind prompt takes Escape as
+    // "cancel" and marks it so. stopPropagation does not stop a second
+    // listener on the same window, so without this the cancel also closed
+    // the menu.
+    if (e.defaultPrevented) return;
     e.stopPropagation();
     e.preventDefault();
     if (typeof onPause === 'function') onPause();
