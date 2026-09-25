@@ -54,6 +54,28 @@ const BIN = join(ROOT, 'rive/sealitaire/music.bin');
 const ASSETS = join(ROOT, 'rive/sealitaire/music');
 const SCENE = join(ROOT, 'rive/sealitaire/scene.rml');
 
+const AFCONVERT = '/usr/bin/afconvert';
+
+// ---------------------------------------------------------------------------
+// THE DECODER, OR NOTHING TO SAY.
+//
+// Every check below that means anything decodes real audio, and the decoder is
+// `/usr/bin/afconvert` — which ships with macOS and exists nowhere else. On a
+// Linux CI runner every single file "fails to decode" with ENOENT, which is
+// not a finding about the bank: it is the same finding about the runner, 354
+// times. That is what blocked three deploys in a row while `npm run ship`
+// stayed green on the Mac that has the binary.
+//
+// So the absence of the decoder is a SKIP, not a failure, and it says so on
+// one line. The gate still runs in full wherever a decoder exists, which is
+// every machine the bank is actually baked on — a bank is baked with
+// afconvert, so the check and the thing it checks are available together.
+if (!existsSync(AFCONVERT)) {
+  console.log(`sealitaire loops: skipped — no ${AFCONVERT} on this machine (macOS only).`);
+  console.log('  The bank is checked by decoding it, so there is nothing to say without a decoder.');
+  process.exit(0);
+}
+
 const ROLES = ['bed', 'intro', 'win'];
 const GATES = ['open', 'deals', 'wins', 'foundations', 'score', 'moves'];
 const LOOP_BYTES = 36;
