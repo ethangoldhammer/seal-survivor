@@ -56,6 +56,34 @@ for (const dir of projects) {
   }
 }
 
+// EVERY require() HAS TO NAME A DECLARED <ScriptAsset>. The CLI viewer finds
+// an undeclared .luau on disk and runs it happily; the web runtime only has
+// the scripts the markup declares, so the require throws at load and the
+// script that asked for it is the one reported dead — `ScriptAsset doesn't
+// have a generator function table` — with nothing pointing at the module.
+// cascade.luau shipped exactly like this on 2026-09-25 and blanked the table.
+for (const dir of projects) {
+  const name = dir.split('/').pop();
+  const rml = readdirSync(dir).filter((f) => f.endsWith('.rml'))
+    .map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
+  const declared = new Set([...rml.matchAll(/<ScriptAsset\b[^>]*\bname="([^"]+)"/g)].map((m) => m[1]));
+  const luau = readdirSync(dir).filter((f) => f.endsWith('.luau'));
+  if (!luau.length) continue;
+  let missing = 0;
+  for (const f of luau) {
+    const src = readFileSync(join(dir, f), 'utf8').replace(/--.*$/gm, '');
+    for (const [, mod] of src.matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      if (declared.has(mod)) continue;
+      missing++;
+      fail(
+        `rive/${name}: ${f} requires '${mod}', which no <ScriptAsset> declares`,
+        `add <ScriptAsset file="${mod}.luau" isModule="true" name="${mod}" id="…"/> beside the others — on the web the require fails and ${f.replace(/\.luau$/, '')} never loads`,
+      );
+    }
+  }
+  if (!missing) ok(`rive/${name}: every require() names a declared ScriptAsset`);
+}
+
 console.log('');
 if (failures) {
   console.error(`rml order: ${failures} problem${failures === 1 ? '' : 's'}`);

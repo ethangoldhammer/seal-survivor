@@ -761,6 +761,7 @@
     <ScriptAsset file="bonespring.luau" isModule="true" name="bonespring" id="0:628"/>
     <ScriptAsset file="bubbles.luau" isModule="true" name="bubbles" id="0:629"/>
     <ScriptAsset file="tankrig.luau" isModule="true" name="tankrig" id="0:630"/>
+    <ScriptAsset file="cascade.luau" isModule="true" name="cascade" id="0:631"/>
     <ScriptAsset file="tuning.luau" isModule="true" name="tuning" id="0:405"/>
     <ScriptAsset file="motion.luau" isModule="true" name="motion" id="0:406"/>
     <ScriptAsset file="puppet.luau" isModule="true" name="puppet" id="0:407"/>
