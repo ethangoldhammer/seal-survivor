@@ -19,7 +19,7 @@
 // `art.rml`, `back.rml`, `cards.rml` again — fails here instead of silently
 // on the web.
 // ============================================================================
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -82,6 +82,26 @@ for (const dir of projects) {
     }
   }
   if (!missing) ok(`rive/${name}: every require() names a declared ScriptAsset`);
+}
+
+// THE SHIPPED .riv HAS TO FIT CLOUDFLARE PAGES, which refuses any file over
+// 25 MiB — and it refuses in the deploy step, after the push, so every test is
+// green and the site simply keeps its last build. fish.mesh's lab bake
+// (`npm run sealitaire:pool`) is 29 MB on its own; the ship bake is
+// `npm run sealitaire:fish`. Four deploys died on this before it was noticed.
+const PAGES_MAX = 25 * 1024 * 1024;
+for (const dir of projects) {
+  const name = dir.split('/').pop();
+  const riv = join(ROOT, 'public', `${name}.riv`);
+  let size;
+  try { size = statSync(riv).size; } catch { continue; }
+  const mb = (size / 1048576).toFixed(1);
+  if (size > PAGES_MAX) {
+    fail(`public/${name}.riv is ${mb} MiB — Cloudflare Pages rejects files over 25 MiB`,
+      name === 'sealitaire' ? 'rebake fish.mesh with `npm run sealitaire:fish` (not --pool), then `npm run sealitaire:ship`' : 'shrink its embedded assets');
+  } else {
+    ok(`public/${name}.riv is ${mb} MiB, under the 25 MiB Pages limit`);
+  }
 }
 
 console.log('');
