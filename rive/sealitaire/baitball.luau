@@ -993,6 +993,39 @@ end
 -- white, no shading, brighter at the rim. `cap` is how many instances the
 -- caller has room for, because the bubble buffer is shared by every tank on
 -- screen and one rattling card must not eat the whole thing.
+-- A body's model matrix, T * Ry(yaw) * Rx(pitch) * Rz(roll) * S(s), written
+-- column-major at `at` — exactly what the Mat4 chain wrote, without the five
+-- matrices and four products it allocated per fish per frame. That was over a
+-- thousand objects a frame with the board full, and the collector's pauses are
+-- hitches. tests.luau checks it against the chain it replaced.
+local function writeModel(buf: buffer, at: number, x: number, y: number, z: number,
+                          yaw: number, pitch: number, roll: number, s: number)
+    local cy, sy = math.cos(yaw), math.sin(yaw)
+    local cx, sx = math.cos(pitch), math.sin(pitch)
+    local cz, sz = math.cos(roll), math.sin(roll)
+    -- R = Ry * (Rx * Rz), row by row.
+    local r00, r01, r02 = cy * cz + sy * sx * sz, -cy * sz + sy * sx * cz, sy * cx
+    local r10, r11, r12 = cx * sz, cx * cz, -sx
+    local r20, r21, r22 = -sy * cz + cy * sx * sz, sy * sz + cy * sx * cz, cy * cx
+    buffer.writef32(buf, at, r00 * s)
+    buffer.writef32(buf, at + 4, r10 * s)
+    buffer.writef32(buf, at + 8, r20 * s)
+    buffer.writef32(buf, at + 12, 0)
+    buffer.writef32(buf, at + 16, r01 * s)
+    buffer.writef32(buf, at + 20, r11 * s)
+    buffer.writef32(buf, at + 24, r21 * s)
+    buffer.writef32(buf, at + 28, 0)
+    buffer.writef32(buf, at + 32, r02 * s)
+    buffer.writef32(buf, at + 36, r12 * s)
+    buffer.writef32(buf, at + 40, r22 * s)
+    buffer.writef32(buf, at + 44, 0)
+    buffer.writef32(buf, at + 48, x)
+    buffer.writef32(buf, at + 52, y)
+    buffer.writef32(buf, at + 56, z)
+    buffer.writef32(buf, at + 60, 1)
+end
+M.writeModel = writeModel
+
 function M.writeBubbles(b: Ball, buf: buffer, at: number, cap: number): number
     local wrote = 0
     for _, u in ipairs(b.bubbles) do
@@ -1005,8 +1038,7 @@ function M.writeBubbles(b: Ball, buf: buffer, at: number, cap: number): number
         local grow = math.min(1, u.age * 9)          -- swells as it leaves the glass
         local d = u.r * grow * (1 - t * t)
         if u.age >= 0 and d > 0.0015 then
-            local model = Mat4.fromTranslation(u.x, u.y, u.z) * Mat4.fromScale(d, d, d)
-            model:writeToBuffer(buf, at)
+            writeModel(buf, at, u.x, u.y, u.z, 0, 0, 0, d)
             buffer.writef32(buf, at + 64, 1.0)
             buffer.writef32(buf, at + 68, 1.0)
             buffer.writef32(buf, at + 72, 1.0)
@@ -1035,12 +1067,7 @@ function M.write(b: Ball, inp: Inputs, buf: buffer, at: number): number
         -- point of their being functions: a squash latched in the body's
         -- frame and a mesh placed in a different one would slide.
         local yaw, pitch = yawPitchOf(f)
-        local model = Mat4.fromTranslation(f.x, f.y, f.z)
-            * Mat4.fromRotationY(yaw)
-            * Mat4.fromRotationX(pitch)
-            * Mat4.fromRotationZ(rollOf(b, f, inp, i))
-            * Mat4.fromScale(f.len, f.len, f.len)
-        model:writeToBuffer(buf, at)
+        writeModel(buf, at, f.x, f.y, f.z, yaw, pitch, rollOf(b, f, inp, i), f.len)
         local v = 0.92 + 0.08 * f.h1
         buffer.writef32(buf, at + 64, inp.back[1] * v)
         buffer.writef32(buf, at + 68, inp.back[2] * v)

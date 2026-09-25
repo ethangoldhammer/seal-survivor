@@ -3332,6 +3332,35 @@ return function(): Tests
             end)
         end)
 
+        test.group('tank instance matrices', function()
+            test.case('writeModel writes exactly what the Mat4 chain wrote', function(expect)
+                -- baitball builds each body's model matrix by hand now, to stop
+                -- allocating five Mat4s per fish per frame. The convention it
+                -- has to match is the runtime's, so check against the runtime.
+                local cases = {
+                    { 0.1, -0.2, 0.3, 0.7, -0.4, 1.1, 0.25 },
+                    { -1, 2, 0.5, -2.3, 0.9, -0.6, 1.7 },
+                    { 0, 0, 0, 0, 0, 0, 0.04 },
+                }
+                local a, b = buffer.create(64), buffer.create(64)
+                for _, c in ipairs(cases) do
+                    local x, y, z, yaw, pitch, roll, s = c[1], c[2], c[3], c[4], c[5], c[6], c[7]
+                    local m = Mat4.fromTranslation(x, y, z)
+                        * Mat4.fromRotationY(yaw)
+                        * Mat4.fromRotationX(pitch)
+                        * Mat4.fromRotationZ(roll)
+                        * Mat4.fromScale(s, s, s)
+                    m:writeToBuffer(a, 0)
+                    BAIT.writeModel(b, 0, x, y, z, yaw, pitch, roll, s)
+                    local worst = 0
+                    for k = 0, 60, 4 do
+                        worst = math.max(worst, math.abs(buffer.readf32(a, k) - buffer.readf32(b, k)))
+                    end
+                    expect(worst < 1e-5).is(true)
+                end
+            end)
+        end)
+
         test.group('winning', function()
             test.case('four full foundations win', function(expect)
                 local g = K.new(3)
