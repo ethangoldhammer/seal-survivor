@@ -199,7 +199,17 @@ function M.build(data: buffer, res: number, open: boolean, strandSize: number): 
     -- The whiskers' grid: finer, keyed sparse; each cell remembers the
     -- vertex nearest the first sample that landed in it.
     local fine = cell * math.max(0.05, strandSize)
-    local FK = 4096
+    -- THE KEY IS SIZED TO THE GRID, and that is a web fix, not tidiness. It
+    -- was fx + 4096 x (fy + 4096 x fz), which runs past 2^31 (4,060,631,151
+    -- at voxelRes 78), and the WEB runtime does not find a table key that
+    -- large: every lookup came back nil, pack() indexed it, and the build
+    -- threw on every frame on the live site while the CLI viewer — which
+    -- keeps the key exact — drew it perfectly. Cells per axis from the mesh's
+    -- own extent plus a margin keeps the largest key in the millions.
+    local FX = math.floor((hi[1] - lo[1]) / fine) + 3
+    local FY = math.floor((hi[2] - lo[2]) / fine) + 3
+    local FZ = math.floor((hi[3] - lo[3]) / fine) + 3
+    assert(FX * FY * FZ < 2 ^ 31, `cubes: the whisker grid {FX}x{FY}x{FZ} is past 2^31 keys; the web runtime cannot key it`)
     local strandCells: { [number]: number } = {}
     local strandOrder: { number } = {}
 
@@ -221,7 +231,7 @@ function M.build(data: buffer, res: number, open: boolean, strandSize: number): 
                     local fx = math.floor((px[a] * u + px[b] * v + px[c] * w - lo[1]) / fine) + 1
                     local fy = math.floor((py[a] * u + py[b] * v + py[c] * w - lo[2]) / fine) + 1
                     local fz = math.floor((pz[a] * u + pz[b] * v + pz[c] * w - lo[3]) / fine) + 1
-                    local fk = fx + FK * (fy + FK * fz)
+                    local fk = fx + FX * (fy + FY * fz)
                     if strandCells[fk] == nil then
                         strandCells[fk] = if u >= v and u >= w then a elseif v >= w then b else c
                         table.insert(strandOrder, fk)
@@ -501,9 +511,9 @@ function M.build(data: buffer, res: number, open: boolean, strandSize: number): 
     local fhalf = fine * 0.5
     for _, fk in strandOrder do
         local vi = strandCells[fk]
-        local fx = fk % FK
-        local fy = (fk // FK) % FK
-        local fz = fk // (FK * FK)
+        local fx = fk % FX
+        local fy = (fk // FX) % FY
+        local fz = fk // (FX * FY)
         local cx = lo[1] + (fx - 0.5) * fine
         local cy = lo[2] + (fy - 0.5) * fine
         local cz = lo[3] + (fz - 0.5) * fine

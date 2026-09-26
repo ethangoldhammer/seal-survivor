@@ -6,6 +6,18 @@
 // transient spikes between long zeros, a track is a continuous floor.
 const taps = [];
 const realConnect = AudioNode.prototype.connect;
+const SOUND = new URLSearchParams(location.search).get('sound') === '1';
+const mutes = new Map();
+function muteFor(ctx) {
+  let m = mutes.get(ctx);
+  if (!m) {
+    m = ctx.createGain();
+    m.gain.value = 0;
+    realConnect.call(m, ctx.destination);
+    mutes.set(ctx, m);
+  }
+  return m;
+}
 AudioNode.prototype.connect = function (dest, ...rest) {
   try {
     if (dest instanceof AudioDestinationNode) {
@@ -18,6 +30,10 @@ AudioNode.prototype.connect = function (dest, ...rest) {
         taps.push(tap);
       }
       realConnect.call(this, tap.analyser);
+      // MUTED UNLESS ASKED (?sound=1): the tap above still hears everything —
+      // it is fed before the speakers — but a harness in the Browser pane has
+      // no business playing through them while someone is working.
+      if (!SOUND) return realConnect.call(this, muteFor(ctx), ...rest);
     }
   } catch { /* never let the tap break the graph */ }
   return realConnect.call(this, dest, ...rest);

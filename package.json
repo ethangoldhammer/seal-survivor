@@ -70,6 +70,7 @@
     "wetris:music": "node tools/wetris-music.mjs",
     "wetris:sfx": "node tools/wetris-sfx.mjs bake",
     "test:wetrissfx": "node tools/wetris-sfx.mjs check",
+    "looks:wetris": "vite build --config tools/looks/vite.wetrismount.config.mjs && node tools/looks/serve.mjs dist-wetris-mount --port 4757",
     "wetris:rev": "$HOME/.rive/bin/rive rive/wetris --once --rev=rive/wetris/build/wetris.rev",
     "wetris:push": "node tools/rive-auth.mjs && $HOME/.rive/bin/rive push rive/wetris",
     "wetris:pull": "node tools/rive-pull.mjs --project rive/wetris",

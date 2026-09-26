@@ -103,6 +103,18 @@ Verified at the first push: the export converts back with every element and
 id, `wetris:pull` against the live file reports no difference, and a second
 push is "already up to date".
 
+## When it works here and not on the site
+
+Look at it on the WEB runtime, not the CLI: `npm run looks:wetris` mounts the
+real ui/wetrisTable.js at http://localhost:4757/tools/looks/wetris-mount.html
+(`?riv=/some.riv` swaps the file; build it with `--publish`, since unsigned
+scripts are rejected on the web). `window.__log` has every console line.
+Sealitaire's live failures were each invisible to the CLI — an undeclared
+require, a >25 MiB .riv, a shader past WebGL2's 16 vertex attributes
+(test:rmlorder and test:sealitaireattrs guard those) — and so was wetris's
+first: a Luau table key past 2^31, which the web runtime never finds
+(cubes.luau's whisker grid, 2026-09-26).
+
 ## In the game
 
 `path/src/ui/wetrisTable.js` mounts it over the menu the way
