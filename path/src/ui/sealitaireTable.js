@@ -62,6 +62,8 @@
 // which `onProgress` is for.
 // ============================================================================
 import { uiText } from '../uiTextTable.js';
+import { mountFullscreenButton } from './fullscreenButton.js';
+import { fullscreenAvailable, isFullscreen, exitFullscreen } from '../systems/fullscreen.js';
 // Root-absolute, then rebased — itch.io serves the build from a subdirectory,
 // where a bare 'sealitaire.riv' resolves against whatever page asked for it.
 // See assetPath.js; every media path in the game goes through this.
@@ -145,6 +147,38 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
   loading.textContent = uiText('sealitaireLoading');
   (parent || document.body).appendChild(wrap);
 
+  // FULLSCREEN, BECAUSE A PHONE HELD SIDEWAYS HAS NO ROOM TO SPARE. Mobile
+  // Safari keeps a bar of its own over the bottom of the page and sizes the
+  // page around it, so the table is laid out correctly into a viewport
+  // shorter than the glass — the foot strip sits under browser furniture and
+  // nothing about it reads as something the table could fix from the inside.
+  // Landscape is where it hurts: the board is already squeezing its columns
+  // to fit (layout.luau's fanFor), and the bar takes the room that squeeze is
+  // fighting for.
+  //
+  // THE BUTTON, NOT AN AUTOMATIC REQUEST. Fullscreen needs a user gesture —
+  // asking on mount is refused, and a refusal on load is invisible — and the
+  // API was absent outright on iPhone for years, so the button asks whether
+  // it can before it draws itself (systems/fullscreen.js). It is the game's
+  // own control, reused rather than copied: a second prefix dance is one that
+  // drifts, and it drifts silently.
+  let fsBtn = null;
+  if (fullscreenAvailable()) {
+    fsBtn = mountFullscreenButton({ parent: wrap });
+    // The game puts it under a pause button this screen does not have, so it
+    // comes back up into the corner, opposite Back.
+    fsBtn.el.style.top = 'calc(8px + env(safe-area-inset-top, 0px))';
+    fsBtn.el.style.left = 'auto';
+    fsBtn.el.style.right = 'calc(8px + env(safe-area-inset-right, 0px))';
+  }
+
+  // BACK HAS TO WORK WHILE THE FILE IS STILL COMING DOWN. `mounted` is only
+  // assigned after the .riv is fetched and the runtime is up, and
+  // hideSealitaire returns early without it — so during the seconds a phone
+  // spends on 22MB, Back removed nothing and simply handed the menu back
+  // UNDER a full-screen opaque layer. This tears the layer down itself and
+  // then calls hideSealitaire for the rest, which is a no-op if the mount
+  // never completed. wetrisTable.js has the same shape for the same reason.
   const exit = () => { hideSealitaire(); if (typeof onExit === 'function') onExit(); };
   back.addEventListener('click', exit);
   // ESCAPE IS THE TABLE'S OWN, and it has to be captured: table.luau takes
@@ -172,6 +206,20 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
     else exit();
   };
   window.addEventListener('keydown', onKey, true);
+
+  // THE HANDLE IS PUBLISHED BEFORE THE DOWNLOAD, not after it. It used to be
+  // assigned on the last line of this function — after the 22MB .riv had
+  // arrived and the runtime was up — and hideSealitaire returns early
+  // without it. So for the several seconds a phone spends fetching there was
+  // no way to close the table: Back handed the menu back UNDERNEATH a
+  // full-screen opaque layer, and the menu's own close did nothing at all.
+  //
+  // Here rather than beside the wrap, because `onKey` is a `const` below and
+  // reading it earlier is a temporal-dead-zone throw from inside the mount —
+  // which leaves the layer up and looks exactly like the bug being fixed.
+  // Everything that exists this early goes in; the runtime is added below,
+  // and the teardown copes with the half that may be missing.
+  mounted = { wrap, fsBtn, onKey, rive: null, onResize: null, canvas: null, cancelSettle: () => {} };
 
   // The runtime and the file in parallel — the wasm is ~2 MB and the .riv
   // ~19 MB, so the wasm is never the long pole and there is no reason to
@@ -221,7 +269,9 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
   };
   window.addEventListener('resize', onResize);
 
-  mounted = { wrap, rive, onResize, onKey, canvas, cancelSettle: () => clearTimeout(settle) };
+  // Filled in now that there is a runtime to tear down. The handle itself
+  // was published before the download (see above), so this only adds.
+  Object.assign(mounted, { rive, onResize, canvas, cancelSettle: () => clearTimeout(settle) });
   return mounted;
 }
 
@@ -310,12 +360,21 @@ async function fetchRiv(onProgress) {
  */
 export function hideSealitaire() {
   if (!mounted) return;
-  const { wrap, rive, onResize, onKey, cancelSettle } = mounted;
+  const { wrap, rive, onResize, onKey, fsBtn, cancelSettle } = mounted;
   mounted = null;
   cancelSettle();
-  window.removeEventListener('resize', onResize);
+  if (onResize) window.removeEventListener('resize', onResize);
   window.removeEventListener('keydown', onKey, true);
-  try { rive.cleanup(); } catch { /* already gone */ }
+  // THE TEARDOWN IS HERE, not in the Back handler, because Back is only one
+  // of the ways out — the menu closes the table directly. Giving the screen
+  // back matters: staying fullscreen would drop the player into the menu with
+  // no browser chrome and nothing to say why. The button unhooks its own
+  // fullscreenchange listener, which `wrap.remove()` alone would leave live.
+  if (isFullscreen()) exitFullscreen();
+  fsBtn?.remove();
+  // `rive` is null when the table is closed mid-download, which is the case
+  // this teardown exists to survive.
+  try { rive?.cleanup(); } catch { /* already gone */ }
   wrap.remove();
 }
 

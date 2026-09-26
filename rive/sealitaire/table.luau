@@ -6859,10 +6859,26 @@ local function draw(self: Table, renderer: Renderer)
             buffer.writef32(b, 4, screen.height)
             buffer.writef32(b, 8, self.time)
             buffer.writef32(b, 12, self.energy)
-            buffer.writef32(b, 16, T.curve)
-            buffer.writef32(b, 20, T.scanlines)
-            buffer.writef32(b, 24, T.aberration)
-            buffer.writef32(b, 28, T.vignette)
+            -- THE TREATMENT FADES AS THE CARD SHRINKS. Every one of these is
+            -- a fixed-pixel effect over a card that is not a fixed size: at
+            -- 1600x1000 a card is 120px wide and a 3px scanline is texture
+            -- over it, but a phone held sideways lays the same board out at
+            -- `fit` ~0.55 and the tank inside the card is barely forty pixels
+            -- tall. The same lines are then a third of the fish, the barrel
+            -- curve bends a card most of the way to unreadable at the edges,
+            -- and the split fringes a rank that is already six pixels of ink.
+            --
+            -- Keyed to `fit` — the card's own scale — rather than to a device
+            -- or a viewport width, because it is the CARD getting small that
+            -- does the damage, and `fit` is that number wherever it comes
+            -- from. It also means the desktop window tells the truth: drag it
+            -- narrow and the treatment eases off exactly as it does on a
+            -- phone, so this is tunable without a phone in your hand.
+            local ease = LAYOUT.crtEase(g, T.crtSmall, T.crtSmallFit, T.crtFullFit)
+            buffer.writef32(b, 16, T.curve * ease)
+            buffer.writef32(b, 20, T.scanlines * ease)
+            buffer.writef32(b, 24, T.aberration * ease)
+            buffer.writef32(b, 28, T.vignette * ease)
             -- Where the seal's canvas sits, in screen uv.
             buffer.writef32(b, 32, 0)
             buffer.writef32(b, 36, 0)
@@ -6894,8 +6910,10 @@ local function draw(self: Table, renderer: Renderer)
             buffer.writef32(b, 116, T.metalGlintWidth)
             buffer.writef32(b, 120, T.metalMirror)
             buffer.writef32(b, 124, T.metalSeam)
-            -- The tank's scanlines (row 8).
-            buffer.writef32(b, 128, T.tankScan)
+            -- The tank's scanlines (row 8), eased by the same number: they
+            -- are drawn in the CARD's space, so they are the first thing a
+            -- small card cannot afford.
+            buffer.writef32(b, 128, T.tankScan * ease)
             buffer.writef32(b, 132, T.tankScanPitch)
             buffer.writef32(b, 136, T.tankScanScroll)
             buffer.writef32(b, 140, T.tankScanBg)

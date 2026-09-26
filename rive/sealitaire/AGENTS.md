@@ -1399,6 +1399,44 @@ was first named `i`, and that alone blanked the whole screen. A frame that
 goes dark after a shader edit is a compile error until proven otherwise —
 bisect the edit, and name fields by meaning.
 
+## A phone held sideways
+
+Two things the table does differently when the card gets small, both of them
+about a screen nobody testing this is holding.
+
+**Fullscreen.** Mobile Safari keeps a bar over the bottom of the page and
+sizes the page around it, so the board lays out correctly into a viewport
+shorter than the glass and the foot strip sits under browser furniture —
+landscape worst, where the columns are already squeezing to fit. The web
+mount draws the game's own fullscreen button (`systems/fullscreen.js`, the
+same prefix dance and the same capability check, reused rather than copied)
+in the corner opposite Back. It is a BUTTON and not an automatic request:
+fullscreen needs a user gesture, and a refusal on load is invisible. Closing
+the table gives the screen back, or the player lands in the menu with no
+browser chrome and nothing to say why.
+
+**The CRT eases off.** `crtSmall`, `crtSmallFit` and `crtFullFit` under `crt`
+scale all four CRT rows AND the tank's own scanlines by `LAYOUT.crtEase` —
+1 at `crtFullFit` and above, `crtSmall` at `crtSmallFit` and below, and never
+above 1, so a look tuned on the desktop is exactly what ships there. It is
+keyed to `fit`, the CARD's scale, not to a device or a viewport width,
+because every one of those effects is fixed-PIXEL over a card that is not a
+fixed size: at 1600x1000 a card is 120px wide and a 3px line is texture on
+it, while a phone in landscape lays the same seven columns out at `fit` 0.47
+and the tank inside the card is forty pixels tall. Keying it to the card also
+means a narrow desktop window tells the whole truth, so it tunes without a
+phone in your hand. `sealitaire:test` holds it at thirteen viewports.
+
+**Back works during the download.** The mount's handle used to be published
+on the last line of `showSealitaire`, after the 22MB .riv had arrived, and
+`hideSealitaire` returns early without it — so for the seconds a phone spends
+fetching, Back handed the menu back UNDERNEATH a full-screen opaque layer and
+the menu's own close did nothing. The handle goes up before the download now,
+with the runtime added to it after, and the teardown copes with the half that
+may be missing. `npm run test:sealitairechrome` is the guard; it never awaits
+the mount, which is the only reason it can check any of this without a WebGL
+runtime.
+
 ## Sixteen vertex attributes, and not one more
 
 WebGL2 guarantees `MAX_VERTEX_ATTRIBS` **16**, and WebKit ships exactly the

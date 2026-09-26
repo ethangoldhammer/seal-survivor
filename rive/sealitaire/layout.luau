@@ -364,6 +364,26 @@ function M.compute(w: number, h: number): Geom
     }
 end
 
+-- HOW MUCH OF THE CRT TREATMENT A CARD THIS SIZE CAN CARRY: 1 at `fullFit`
+-- and above, `small` at `smallFit` and below, smoothstepped between and never
+-- above 1 — this only ever takes the effects DOWN, so a look tuned on the
+-- desktop is exactly the look that ships there.
+--
+-- It is keyed to `fit`, the card's own scale, and not to a viewport width or
+-- a device: the barrel curve, the scanlines and the chromatic split are all
+-- fixed-PIXEL effects over a card that is not a fixed size, so it is the card
+-- shrinking that does the damage. At 1600x1000 a card is 120px wide and a 3px
+-- line is texture on it; a phone in landscape lays the same seven columns out
+-- at about half that, where the tank inside the card is forty pixels tall and
+-- the same line is a third of a fish. Keying it here also means a narrow
+-- desktop window tells the whole truth, so it can be tuned without a phone.
+function M.crtEase(g: Geom, small: number, smallFit: number, fullFit: number): number
+    local hi = math.max(0.05, fullFit)
+    local lo = math.min(hi - 0.01, smallFit)
+    local u = math.max(0, math.min(1, (g.fit - lo) / (hi - lo)))
+    return math.min(1, small + (1 - small) * (u * u * (3 - 2 * u)))
+end
+
 -- Where the title is DRAWN, which is inside its hot zone rather than at its
 -- corner. Kept here so the rectangle and the wordmark can never drift apart.
 function M.titleAt(g: Geom): (number, number)

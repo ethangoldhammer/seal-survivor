@@ -247,6 +247,15 @@ local rows: { Row } = {
     { key = 'reflect', min = 0, max = 2, value = 1.4859, cat = 'surface' },                -- how much sky a tilted face turns around (Fresnel, so flat water shows almost none)
     { key = 'reflectTilt', min = 1, max = 12, value = 5, cat = 'surface' },           -- slope exaggeration before the Fresnel: real water at this scale is far too flat to catch anything
     -- crt
+    -- HOW MUCH OF THE TREATMENT A SMALL CARD CARRIES. Every row below is a
+    -- fixed-pixel effect over a card whose size is not fixed; on a phone in
+    -- landscape the board lays out at `fit` ~0.55 and the same scanlines,
+    -- barrel and fringe sit over a tank forty pixels tall. These two scale
+    -- all four CRT rows AND the tank's own scanlines by the card's size, and
+    -- only ever downward: at `crtFullFit` and above nothing changes at all.
+    { key = 'crtSmall', min = 0, max = 1, value = 0.35, cat = 'crt' },                -- what survives at the smallest card; 1 is no easing at all, 0 is no CRT on a phone
+    { key = 'crtSmallFit', min = 0.2, max = 1, value = 0.55, cat = 'crt' },           -- the `fit` at which only `crtSmall` is left (a phone in landscape is about here)
+    { key = 'crtFullFit', min = 0.5, max = 1.5, value = 0.9, cat = 'crt' },           -- the `fit` at and above which the look is exactly as tuned
     { key = 'curve', min = 0, max = 0.15, value = 0.012903, cat = 'crt' },
     { key = 'scanlines', min = 0, max = 1, value = 0.18968, cat = 'crt' },
     { key = 'aberration', min = 0, max = 0.02, value = 0, cat = 'crt' },

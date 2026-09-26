@@ -346,6 +346,7 @@ const BLURBS = {
   'test:sealitairetune': 'The TANKS-SAVE write-back: one tanks.csv row changes and no other byte of the file does.',
   'test:sealitairefish': 'The tank pack on disk: v2 header, joints inside their palettes, weights that sum to one, and every clip really moves its creature without changing its size.',
   'test:sealitaireattrs': 'The tank shader fits a browser: 16 vertex attributes is WebGL2\'s guaranteed ceiling and a seventeenth compiles nowhere but the native viewer. Also that fish.wgsl and the pipeline\'s vertexLayout name the same slots.',
+  'test:sealitairechrome': 'The table\'s own chrome on a phone: the fullscreen button is up before the 22MB .riv is fetched, is not drawn on a shell with no fullscreen API, and closing the table gives the screen back.',
   'sealitaire:clips': 'Every animation clip in every model tanks.csv and pool.csv name, with its length — what a row\'s `clip` cell can pick from.',
   'sealitaire:loops': 'Where the loops are in one long bounce: the bar grid, every 4-bar block\'s level, which blocks are the same take, and the section boundaries. Needs --bpm; --write seeds musicLoops.csv.',
   'sealitaire:fbx': 'An .fbx in public/models to a .glb beside it (mesh, rig, clips; UVs flipped to glTF\'s frame), so the tank pack can bake it: `-- seagull beluga`.',

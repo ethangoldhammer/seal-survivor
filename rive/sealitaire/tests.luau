@@ -2998,6 +2998,45 @@ return function(): Tests
             -- A degenerate size must still produce a usable table rather than
             -- a divide by zero: `resize` is called before the window has
             -- settled, and once with nothing at all.
+            test.case('the CRT treatment eases off as the card shrinks, and never up', function(expect)
+                local SMALL, SMALL_FIT, FULL_FIT = 0.35, 0.55, 0.9
+                local desktop = LAYOUT.compute(1600, 1000)
+                local phone = LAYOUT.compute(844, 390)
+                local ease = function(g: LAYOUT.Geom): number
+                    return LAYOUT.crtEase(g, SMALL, SMALL_FIT, FULL_FIT)
+                end
+                -- The reference desktop is the look as tuned: untouched.
+                expect(math.abs(ease(desktop) - 1)).lessThan(1e-6)
+                -- A phone in landscape is where the cards are smallest, and
+                -- it is the case this exists for.
+                expect(phone.fit < SMALL_FIT).is(true)
+                expect(math.abs(ease(phone) - SMALL)).lessThan(1e-6)
+                -- Never above 1 at any size, and never below the floor.
+                local sizes = {
+                    { 1600, 1000 }, { 390, 844 }, { 430, 932 }, { 360, 640 },
+                    { 320, 568 }, { 768, 1024 }, { 1024, 768 }, { 834, 1194 },
+                    { 844, 390 }, { 1280, 800 }, { 1920, 1080 }, { 2560, 1440 },
+                    { 3440, 1440 },
+                }
+                for _, wh in ipairs(sizes) do
+                    local e = ease(LAYOUT.compute(wh[1], wh[2]))
+                    expect(e <= 1.0000001).is(true)
+                    expect(e >= SMALL - 1e-9).is(true)
+                end
+                -- Monotone in the card's size: a bigger card never carries
+                -- LESS of the treatment than a smaller one.
+                local last = -1
+                for w = 320, 2560, 40 do
+                    local g = LAYOUT.compute(w, 800)
+                    local e = ease(g)
+                    if g.fit >= SMALL_FIT and g.fit <= FULL_FIT then
+                        expect(e >= last - 1e-9).is(true)
+                        last = e
+                    end
+                end
+                -- `small` 1 is the switch that turns the whole easing off.
+                expect(math.abs(LAYOUT.crtEase(phone, 1, SMALL_FIT, FULL_FIT) - 1)).lessThan(1e-6)
+            end)
             test.case('a zero viewport still computes', function(expect)
                 local g = LAYOUT.compute(0, 0)
                 expect(g.cw > 0).is(true)
