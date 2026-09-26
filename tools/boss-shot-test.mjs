@@ -891,8 +891,12 @@ const settleClick = async () => {
   const before = downloads;
   for (let i = 0; i < 40 && downloads === before; i++) await new Promise((r) => setTimeout(r, 5));
 };
+const beforeFirst = toDataURLCalls;
 document.getElementById('svSheetSave').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
 await settleClick();
+// What ONE compose costs, measured rather than typed — the cell count and the
+// card renderer both move, and a literal here would go stale as a pass.
+const sheetEncodes = Math.max(1, toDataURLCalls - beforeFirst);
 check('Save all saves the run, not a single kill',
   downloads === 1 && lastDownloadName === 'seal-survivor-run.png', lastDownloadName);
 
@@ -903,6 +907,65 @@ document.getElementById('svSheetSave').dispatchEvent(new dom.window.MouseEvent('
 await settleClick();
 check('...and is not composed again for the second press', toDataURLCalls === beforeCompose,
   `${toDataURLCalls - beforeCompose} extra encode(s)`);
+
+// NOR WHILE THE FIRST ONE IS STILL COMPOSING, which is the case the check
+// above cannot reach: it presses twice with the cache already written, and the
+// cache is only written at the END of a compose. The two callers that actually
+// collide are the warm-up and the button — wireTrophy fires
+// warmShareCards().then(warmRunSheet) when the score card opens, and a player
+// who presses Share before that lands composes the whole sheet a second time,
+// on a phone, inside the transient-activation window the warm-up exists to
+// keep clear.
+//
+// This is how it was FOUND, which is worth writing down: the check above went
+// red in CI and nowhere else — 55 extra encodes on a runner doing three suites
+// at once, green on every developer machine — because the interleaving is a
+// matter of which of the two finishes first. A slow machine is not a flaky
+// test here, it is the phone.
+SHOT.resetBossShot();
+SHOT.captureBossShot(canvas, { ...meta, name: 'Racewinner' });
+await new Promise((r) => setTimeout(r, 10));   // toBlob is a callback
+const beforeRace = toDataURLCalls;
+const raced = await Promise.all([
+  SHOT.warmRunSheet({ score: 900, bosses: 1 }),
+  SHOT.saveRunSheet({ score: 900, bosses: 1 }),
+  SHOT.shareRunSheet({ score: 900, bosses: 1 }),
+]);
+check('three callers arriving mid-compose share the one compose',
+  toDataURLCalls - beforeRace <= sheetEncodes,
+  `${toDataURLCalls - beforeRace} encode(s) for ${sheetEncodes} sheet('s worth)`);
+check('...and every one of them gets the sheet', raced[1] !== 'unavailable' && raced[2] !== 'unavailable',
+  raced.join(' · '));
+
+// A KILL LANDING MID-COMPOSE is the other half of sharing one compose, and it
+// pulls the opposite way: the compose in flight is now drawing a run that is
+// one picture out of date, and the whole point of caching is that whatever it
+// writes is what every later press gets. Waiting on it would serve a sheet
+// with the player's last boss missing from it, cached, until the kill after
+// that.
+//
+// The capture is SYNCHRONOUS and goes in immediately after the compose starts,
+// which puts it inside the first await — the same window a real kill lands in.
+//
+// The first capture is setup, not the case: it empties the cache the race
+// above just filled, so that the compose below is a real compose rather than
+// an instant hit. Its own cost is measured in passing, because a capture
+// encodes the picture it keeps and that lands in the same counter.
+const beforeCapture = toDataURLCalls;
+SHOT.captureBossShot(canvas, { ...meta, name: 'Warmup' });
+const captureEncodes = toDataURLCalls - beforeCapture;
+const beforeLate = toDataURLCalls;
+const inFlight = SHOT.warmRunSheet({ score: 900, bosses: 1 });
+SHOT.captureBossShot(canvas, { ...meta, name: 'Latecomer' });
+await inFlight;
+const wantLate = sheetEncodes * 2 + captureEncodes;
+check('a kill during the compose throws that sheet away and draws the new one',
+  toDataURLCalls - beforeLate === wantLate,
+  `${toDataURLCalls - beforeLate} encode(s), expected ${wantLate}`);
+const afterLate = toDataURLCalls;
+await SHOT.saveRunSheet({ score: 900, bosses: 1 });
+check('...and the sheet it left behind is the cached one', toDataURLCalls === afterLate,
+  `${toDataURLCalls - afterLate} extra encode(s)`);
 document.createElement = realCreate;
 
 // And nothing survives into the next run.

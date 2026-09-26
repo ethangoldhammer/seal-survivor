@@ -115,8 +115,7 @@ export function bossShotBytes() {
 /** A new run starts with no trophies — the score screen must not show the last one's. */
 export function resetBossShot() {
   shots.length = 0;
-  sheet.url = null;
-  sheet.blob = null;
+  dropSheet();
 }
 
 function formatTime(seconds) {
@@ -209,8 +208,7 @@ export function captureBossShot(canvas, meta = {}) {
     // one the player just made.
     while (shots.length > Math.max(1, cfg().keep ?? 8)) shots.shift();
     // Any sheet composed before this kill is now missing a picture.
-    sheet.url = null;
-    sheet.blob = null;
+    dropSheet();
     return true;
   } catch (err) {
     // A tainted canvas, a lost context, a browser that refuses toDataURL on a
@@ -591,7 +589,9 @@ function thumbnail(src) {
 // press and a run that ends without one being pressed should not have paid for
 // it. Invalidated by any new kill.
 // ---------------------------------------------------------------------------
-const sheet = { url: null, blob: null };
+// `building` is the compose CURRENTLY IN FLIGHT, and `gen` is which sheet it
+// is composing — see buildSheet for why one flag is not enough.
+const sheet = { url: null, blob: null, building: null, gen: 0 };
 
 function sheetCfg() {
   return cfg().sheet ?? {};
@@ -1114,23 +1114,71 @@ export async function saveRunSheet(run = {}) {
 // picture it was meant to attach did not exist yet on the line that asked for
 // it. Nothing about it looked broken, either — the fallback ran, and the
 // fallback is silent on iOS (see download).
+//
+// AND ONCE MEANS ONCE EVEN WHILE IT IS STILL COMPOSING. The cache is only
+// written at the END, so two callers that arrive during the compose both saw
+// an empty cache and both paid for it — and the two callers here are the
+// warm-up and the button, which is the ordinary case rather than a corner.
+// wireTrophy fires warmShareCards().then(warmRunSheet) when the score card
+// opens; a player who presses Share before that lands composes eight Rive
+// cards a second time, on a phone, inside the click's transient activation
+// window. That is precisely the cost the warm-up exists to move off the
+// press. Waiting on the compose already running is both cheaper and sooner.
+//
+// GENERATION, not just a flag: a kill landing mid-compose invalidates a sheet
+// that is still being drawn, and the compose in flight would otherwise finish
+// a moment later and write its now-stale result over the empty cache — a
+// sheet missing the picture the player just earned, cached and served until
+// the next kill. `gen` is what the finishing compose checks to find out that
+// the run moved underneath it.
 async function buildSheet(run) {
   // Both halves, not just the url: a sheet cached by an older build could have
   // a url and no blob, and this is exactly the check that would wave it through.
   if (sheet.url && sheet.blob) return true;
+  if (sheet.building) return sheet.building;
+  const gen = sheet.gen;
+  const mine = (async () => {
+    try {
+      // Async now that the cells are Rive cards — each one has to be given time
+      // to write itself on before it can be read off a canvas. Still composed
+      // once and cached, so a player who shares and then saves pays for it once.
+      const canvas = await composeRunSheet(run);
+      if (!canvas) return false;
+      const url = canvas.toDataURL('image/png');
+      const blob = await blobOf(canvas);
+      // The run moved while we were drawing. Throw this one away and compose
+      // the sheet that is true now — the caller asked for A sheet, and handing
+      // it one that is a kill out of date is worse than making it wait again.
+      if (gen !== sheet.gen) {
+        if (sheet.building === mine) sheet.building = null;
+        return buildSheet(run);
+      }
+      sheet.url = url;
+      sheet.blob = blob;
+      return true;
+    } catch (err) {
+      console.warn(`[bossShot] could not compose the run sheet — ${err}`);
+      return false;
+    }
+  })();
+  sheet.building = mine;
   try {
-    // Async now that the cells are Rive cards — each one has to be given time
-    // to write itself on before it can be read off a canvas. Still composed
-    // once and cached, so a player who shares and then saves pays for it once.
-    const canvas = await composeRunSheet(run);
-    if (!canvas) return false;
-    sheet.url = canvas.toDataURL('image/png');
-    sheet.blob = await blobOf(canvas);
-    return true;
-  } catch (err) {
-    console.warn(`[bossShot] could not compose the run sheet — ${err}`);
-    return false;
+    return await mine;
+  } finally {
+    // Only if it is still OURS. The stale-generation branch above hands off to
+    // a fresh compose, and clearing unconditionally here would drop the flag
+    // that is making the callers behind us wait on it instead of starting a
+    // third.
+    if (sheet.building === mine) sheet.building = null;
   }
+}
+
+/** Forget the composed sheet, and tell any compose in flight that it is now
+ *  drawing a run that no longer exists. */
+function dropSheet() {
+  sheet.url = null;
+  sheet.blob = null;
+  sheet.gen++;
 }
 
 /** canvas.toBlob as a promise. Resolves null rather than rejecting — every
