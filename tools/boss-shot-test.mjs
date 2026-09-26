@@ -114,8 +114,38 @@ dom.window.HTMLCanvasElement.prototype.getContext = function getContext() {
 };
 let toDataURLCalls = 0;
 let lastPngWidth = 0;
+// PER CANVAS SIZE, because `toDataURLCalls` counts every canvas in the
+// process and the run sheet is not the only thing encoding one.
+//
+// This is what "55 extra encode(s)" in CI was, and it was never a recompose:
+// the score card arrives through the shared noise-dissolve reveal, which
+// encodes a 128x128 mask PER ANIMATION FRAME (ui reveals, runReveal <
+// revealScoreCardIn). On a runner slow enough that the reveal is still
+// running when the baseline below is read, its remaining 55 frames land
+// after it and are billed to the press. A global counter cannot tell the
+// sheet's one encode from a menu animation's fifty-five, so it stops being
+// the thing asserted on.
+const encodesBySize = new Map();
+/** Snapshot the per-size counts, so a later call can say what an operation
+ *  encoded WITHOUT counting whatever else in the process was drawing. */
+const encodeSnap = () => new Map(encodesBySize);
+/** The size that grew most since `before`, and by how much. The run sheet's
+ *  dimensions change with the number of cells, so every block that composes
+ *  one learns its size rather than carrying the last block's. */
+const grewMost = (before) => {
+  let key = null;
+  let n = 0;
+  for (const [k, v] of encodesBySize) {
+    const d = v - (before.get(k) ?? 0);
+    if (d > n) { key = k; n = d; }
+  }
+  return { key, n };
+};
+const sizeKey = (c) => `${c.width}x${c.height}`;
+const encodesOf = (key) => encodesBySize.get(key) ?? 0;
 dom.window.HTMLCanvasElement.prototype.toDataURL = function toDataURL() {
   toDataURLCalls++;
+  encodesBySize.set(sizeKey(this), encodesOf(sizeKey(this)) + 1);
   lastPngWidth = this.width;
   return 'data:image/png;base64,STUBBEDPNG';
 };
@@ -891,22 +921,30 @@ const settleClick = async () => {
   const before = downloads;
   for (let i = 0; i < 40 && downloads === before; i++) await new Promise((r) => setTimeout(r, 5));
 };
-const beforeFirst = toDataURLCalls;
+const sizesBefore = new Map(encodesBySize);
 document.getElementById('svSheetSave').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
 await settleClick();
-// What ONE compose costs, measured rather than typed — the cell count and the
-// card renderer both move, and a literal here would go stale as a pass.
-const sheetEncodes = Math.max(1, toDataURLCalls - beforeFirst);
+// WHICH CANVAS IS THE SHEET, learned rather than hardcoded: the one whose
+// size the first compose encoded. Its dimensions fall out of the cell count,
+// the column count, the tilt and the footer, so a literal here would go
+// stale into a pass the first time any of those move.
+let sheetSize = null;
+let sheetEncodes = 1;
+for (const [key, n] of encodesBySize) {
+  const grew = n - (sizesBefore.get(key) ?? 0);
+  if (grew > 0 && (sheetSize === null || grew > sheetEncodes)) { sheetSize = key; sheetEncodes = grew; }
+}
+check('the first press composed a sheet at all', sheetSize !== null, `${sheetSize} x${sheetEncodes}`);
 check('Save all saves the run, not a single kill',
   downloads === 1 && lastDownloadName === 'seal-survivor-run.png', lastDownloadName);
 
 // A sheet is composed once and kept — a player who shares and then saves must
 // not pay for eight downscales twice.
-const beforeCompose = toDataURLCalls;
+const beforeCompose = encodesOf(sheetSize);
 document.getElementById('svSheetSave').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
 await settleClick();
-check('...and is not composed again for the second press', toDataURLCalls === beforeCompose,
-  `${toDataURLCalls - beforeCompose} extra encode(s)`);
+check('...and is not composed again for the second press', encodesOf(sheetSize) === beforeCompose,
+  `${encodesOf(sheetSize) - beforeCompose} extra encode(s) at ${sheetSize}`);
 
 // NOR WHILE THE FIRST ONE IS STILL COMPOSING, which is the case the check
 // above cannot reach: it presses twice with the cache already written, and the
@@ -925,15 +963,16 @@ check('...and is not composed again for the second press', toDataURLCalls === be
 SHOT.resetBossShot();
 SHOT.captureBossShot(canvas, { ...meta, name: 'Racewinner' });
 await new Promise((r) => setTimeout(r, 10));   // toBlob is a callback
-const beforeRace = toDataURLCalls;
+const beforeRace = encodeSnap();
 const raced = await Promise.all([
   SHOT.warmRunSheet({ score: 900, bosses: 1 }),
   SHOT.saveRunSheet({ score: 900, bosses: 1 }),
   SHOT.shareRunSheet({ score: 900, bosses: 1 }),
 ]);
-check('three callers arriving mid-compose share the one compose',
-  toDataURLCalls - beforeRace <= sheetEncodes,
-  `${toDataURLCalls - beforeRace} encode(s) for ${sheetEncodes} sheet('s worth)`);
+// One sheet's worth, whatever size this one-cell sheet came out.
+const racedSheet = grewMost(beforeRace);
+check('three callers arriving mid-compose share the one compose', racedSheet.n <= 1,
+  `${racedSheet.n} encode(s) at ${racedSheet.key}`);
 check('...and every one of them gets the sheet', raced[1] !== 'unavailable' && raced[2] !== 'unavailable',
   raced.join(' · '));
 
@@ -951,21 +990,31 @@ check('...and every one of them gets the sheet', raced[1] !== 'unavailable' && r
 // above just filled, so that the compose below is a real compose rather than
 // an instant hit. Its own cost is measured in passing, because a capture
 // encodes the picture it keeps and that lands in the same counter.
-const beforeCapture = toDataURLCalls;
 SHOT.captureBossShot(canvas, { ...meta, name: 'Warmup' });
-const captureEncodes = toDataURLCalls - beforeCapture;
-const beforeLate = toDataURLCalls;
+const beforeLate = encodeSnap();
 const inFlight = SHOT.warmRunSheet({ score: 900, bosses: 1 });
 SHOT.captureBossShot(canvas, { ...meta, name: 'Latecomer' });
 await inFlight;
-const wantLate = sheetEncodes * 2 + captureEncodes;
+// THE REPLACEMENT SHEET IS THE ASSERTION, not a count. The two composes in
+// this window are different SIZES — the sheet grew a cell when the kill
+// landed — so "how many at one size" cannot see it. What the old code did
+// was encode the two-cell sheet and cache it; what the fix does is throw
+// that away and encode the three-cell one. So: was the three-cell sheet
+// encoded at all?
+//
+// Measured by composing one and reading its dimensions rather than typing
+// them: the cell count, the columns, the tilt and the footer all feed the
+// canvas size, and a literal would go stale into a pass.
+const replacement = await SHOT.composeRunSheet({ score: 900, bosses: 1 });
+const replacementKey = `${replacement.width}x${replacement.height}`;
 check('a kill during the compose throws that sheet away and draws the new one',
-  toDataURLCalls - beforeLate === wantLate,
-  `${toDataURLCalls - beforeLate} encode(s), expected ${wantLate}`);
-const afterLate = toDataURLCalls;
+  encodesOf(replacementKey) > (beforeLate.get(replacementKey) ?? 0),
+  `wanted ${replacementKey}; drew ${[...encodesBySize]
+    .filter(([k, n]) => n > (beforeLate.get(k) ?? 0)).map(([k]) => k).join(', ')}`);
+const afterLate = encodeSnap();
 await SHOT.saveRunSheet({ score: 900, bosses: 1 });
-check('...and the sheet it left behind is the cached one', toDataURLCalls === afterLate,
-  `${toDataURLCalls - afterLate} extra encode(s)`);
+check('...and the sheet it left behind is the cached one', grewMost(afterLate).n === 0,
+  `${grewMost(afterLate).n} extra encode(s)`);
 document.createElement = realCreate;
 
 // And nothing survives into the next run.
