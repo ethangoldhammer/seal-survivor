@@ -183,7 +183,7 @@ local HEAD_TURN = 9        -- ease of the nose toward its target, before the tur
 -- age, so the dent costs one column rather than two.
 -- Then two more columns: the glow field's per-card numbers (speed, scale,
 -- contrast, coverage) and (pan, evolve, -, -).
-local STRIDE = 208
+local STRIDE = 192
 M.STRIDE = STRIDE
 
 function M.new(seed: number): Ball
@@ -1048,7 +1048,7 @@ function M.writeBubbles(b: Ball, buf: buffer, at: number, cap: number): number
             buffer.writef32(buf, at + 88, 1.0)
             buffer.writef32(buf, at + 92, 1.0)   -- emissive
             -- No pose (the identity palette, weight 0), no glow, no dent.
-            for k = 112, 204, 4 do
+            for k = 112, 188, 4 do
                 buffer.writef32(buf, at + k, 0)
             end
             at += STRIDE
@@ -1098,22 +1098,20 @@ function M.write(b: Ball, inp: Inputs, buf: buffer, at: number): number
         buffer.writef32(buf, at + 172, inp.bioCoverage)
         buffer.writef32(buf, at + 176, inp.bioPan)
         buffer.writef32(buf, at + 180, inp.bioEvolve)
-        buffer.writef32(buf, at + 184, 0)
-        buffer.writef32(buf, at + 188, 0)
-        -- THE RIG COLUMN. x is WHICH ROW of the bend palette is this
-        -- body's (fish.wgsl, tankrig.luau): `at` is a byte offset into the
-        -- SPECIES' instance buffer, so at // STRIDE is its index among
-        -- every body of that species this frame, across all the cards —
-        -- not `i`, which only counts within one card.
+        -- THE BEND ROW, in bioField2's third float. It is WHICH ROW of the
+        -- bend palette is this body's (fish.wgsl, tankrig.luau): `at` is a
+        -- byte offset into the SPECIES' instance buffer, so at // STRIDE is
+        -- its index among every body of that species this frame, across all
+        -- the cards — not `i`, which only counts within one card.
         --
-        -- It gets a column of its own rather than riding in the whole
-        -- number of anim.x, which the shader's `fract` would have made
-        -- free: anim.x means the clip phase, and there is a test that says
-        -- so. Three floats spare.
-        buffer.writef32(buf, at + 192, at // STRIDE)
-        buffer.writef32(buf, at + 196, 0)
-        buffer.writef32(buf, at + 200, 0)
-        buffer.writef32(buf, at + 204, 0)
+        -- It had a vertex attribute of its own and that was one too many:
+        -- seventeen against WebGL2's guaranteed sixteen, which compiles
+        -- nowhere in a browser and everywhere in the native viewer. It is
+        -- not in anim.x — the shader's `fract` would have made that free,
+        -- but anim.x MEANS the clip phase and a test says so — it is in the
+        -- two floats this record was already sending as zero.
+        buffer.writef32(buf, at + 184, at // STRIDE)
+        buffer.writef32(buf, at + 188, 0)
         at += STRIDE
     end
     return at

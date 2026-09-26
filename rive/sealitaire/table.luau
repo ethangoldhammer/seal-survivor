@@ -4425,7 +4425,6 @@ local function loadFish(self: Table, context: Context): boolean
         { format = 'float32x4', slot = 13, offset = 144 },
         { format = 'float32x4', slot = 14, offset = 160 },
         { format = 'float32x4', slot = 15, offset = 176 },
-        { format = 'float32x4', slot = 16, offset = 192 },
     } }
     self.fishPipe = GPUPipeline.new({
         vertex = shader, fragment = shader,

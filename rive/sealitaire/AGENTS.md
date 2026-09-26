@@ -1399,6 +1399,33 @@ was first named `i`, and that alone blanked the whole screen. A frame that
 goes dark after a shader edit is a compile error until proven otherwise —
 bisect the edit, and name fields by meaning.
 
+## Sixteen vertex attributes, and not one more
+
+WebGL2 guarantees `MAX_VERTEX_ATTRIBS` **16**, and WebKit ships exactly the
+guarantee — so `fish.wgsl`'s VSIn may declare locations 0..15 and no more.
+It had seventeen for a while, and the seventeenth cost the site every fish:
+
+```
+Ore GL shader compile error: 'location' : Attribute location out of range
+skip make bindGroup (unresolved dep) / pipeline dropped pass draws
+```
+
+The shader module fails, the bind group cannot resolve, every pass the
+pipeline wants is dropped: blank striped cards on sealsurvivor.com and
+dropped frames on a play. **Nothing here could see it.** The native viewer
+has far more slots, so `npm run sealitaire:shot` rendered all 52 cards
+perfectly, and the web runtime said only "unresolved dep, churn" until it
+was bumped past 2.42.0. Keep that bump: the older runtime cannot tell you
+what is wrong.
+
+The bend row (`tankrig.luau`'s palette row, one float) rides in
+`bioField2.z` for this reason, where the instance record was already sending
+a zero — it is not an attribute of its own and must not become one again.
+`npm run test:sealitaireattrs` is the gate: it counts the locations, checks
+they run 0..n-1 with no gap, checks the pipeline's `vertexLayout` names the
+same slots as the shader (two lists in two files that disagree silently),
+and checks no instance attribute reads past baitball's record.
+
 ## The tank's toon look
 
 Every creature is cel shaded and outlined, and all of it is on sliders under

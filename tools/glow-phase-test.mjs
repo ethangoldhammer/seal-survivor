@@ -509,6 +509,14 @@ section('THE SCHOOL WAVE — one field in the water, not one clock per fish');
   for (let i = 0; i < 4; i++) {
     const [b] = [glowingBody('lantern')];
     instantiateBiolumSkin(b);
+    // PINNED, NOT ROLLED. instantiateBiolumSkin seeds each body with
+    // Math.random() — correct for real fish — and the offset is then
+    // QUANTISED to `phaseSteps` (4). Four random draws therefore land in the
+    // same bucket about one run in sixty-four, and the check below, which
+    // wants the four to differ, failed that often: a ship gate that blocks
+    // at random, on a test with nothing wrong with it. Four seeds spread
+    // across the range say what the check means without rolling for it.
+    b.material.userData.__bioSkinSeed = 0.05 + i * 0.25;
     school.push(b);
   }
   applyBiolumSkinSettings();

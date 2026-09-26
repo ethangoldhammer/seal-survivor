@@ -129,8 +129,18 @@ struct VSIn {
     // cell or the tuner's global): speed, scale, contrast, coverage; then
     // pan (radians), evolve. Two cards on one screen can run two currents.
     @location(14) bioField: vec4f,
+    // pan (radians), evolve, THE BEND ROW, unused.
+    //
+    // SIXTEEN ATTRIBUTES IS THE CEILING, and the bend row used to be a
+    // seventeenth of its own. WebGL2 guarantees MAX_VERTEX_ATTRIBS 16 and
+    // WebKit ships exactly the minimum, so `@location(16)` is not merely
+    // tight — it fails to compile on every WebGL2 browser: "Attribute
+    // location out of range", then the bind group cannot resolve, then the
+    // pipeline drops every pass. No fish in any tank on the site, while the
+    // native viewer (far more slots) rendered all 52 cards perfectly, so
+    // nothing in the project could see it. It rides here because this
+    // record already carried two unused floats.
     @location(15) bioField2: vec4f,
-    @location(16) rig: vec4f,
 };
 
 struct VSOut {
@@ -174,7 +184,7 @@ fn skinOf(in: VSIn) -> mat4x4<f32> {
     let f0 = i32(floor(fpos)) % frames;
     let f1 = (f0 + 1) % frames;
     let t = fract(fpos);
-    let row = in.rig.x;
+    let row = in.bioField2.z;
     let id = mat4x4<f32>(vec4f(1.0, 0.0, 0.0, 0.0), vec4f(0.0, 1.0, 0.0, 0.0), vec4f(0.0, 0.0, 1.0, 0.0), vec4f(0.0, 0.0, 0.0, 1.0));
     // The pose weight fades THE CLIP, and only the clip. Faded outside the
     // per-joint loop, as it was, it also faded the bend — and since no
