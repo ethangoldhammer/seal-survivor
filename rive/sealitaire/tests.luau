@@ -3037,6 +3037,68 @@ return function(): Tests
                 -- `small` 1 is the switch that turns the whole easing off.
                 expect(math.abs(LAYOUT.crtEase(phone, 1, SMALL_FIT, FULL_FIT) - 1)).lessThan(1e-6)
             end)
+            -- The mirror of the case above, and the pair is the point: the
+            -- CRT comes OFF a small card and the writing goes back ON it.
+            test.case('the corner compensates as the card shrinks, and never on the desktop', function(expect)
+                local FLOOR, MOST = 12, 1.7
+                local desktop = LAYOUT.compute(1600, 1000)
+                local phone = LAYOUT.compute(852, 393)
+                local scale = function(g: LAYOUT.Geom): number
+                    return LAYOUT.cornerScale(g, FLOOR, MOST)
+                end
+                -- The reference desktop already clears the floor, so this is
+                -- exactly 1 and the corner Ethan tuned is the corner drawn.
+                -- Asserted through the SAME arithmetic the function uses
+                -- rather than against a typed 14.8: a change to the markup's
+                -- font size should move both together or fail here.
+                expect(LAYOUT.RANK_CAP * desktop.fit >= FLOOR).is(true)
+                expect(math.abs(scale(desktop) - 1)).lessThan(1e-6)
+                -- A landscape phone is the case this exists for: the glyph is
+                -- under the floor there, so it grows.
+                expect(LAYOUT.RANK_CAP * phone.fit < FLOOR).is(true)
+                expect(scale(phone) > 1).is(true)
+                -- And it grows to the floor EXACTLY, which is the whole claim
+                -- — not to some curve that happens to be bigger. Asserted
+                -- with the ceiling out of the way, because at the tuned 1.7
+                -- the phone is the case where the ceiling BITES: 14.84 * 0.47
+                -- is 6.98px and reaching 12 would take 1.718.
+                expect(math.abs(LAYOUT.RANK_CAP * phone.fit * LAYOUT.cornerScale(phone, FLOOR, 4) - FLOOR)).lessThan(1e-6)
+                -- So the shipped numbers land just under the floor rather
+                -- than on it — 11.87px of a wanted 12 — and that is the
+                -- trade being made, not a rounding error. If this moves, one
+                -- of the two tuning rows moved and the other should be looked
+                -- at with it.
+                expect(math.abs(scale(phone) - MOST)).lessThan(1e-6)
+                expect(LAYOUT.RANK_CAP * phone.fit * scale(phone) > FLOOR * 0.98).is(true)
+                -- Never below 1 (the corner may not shrink) and never above
+                -- `most` (past which it covers the card's own picture).
+                local sizes = {
+                    { 1600, 1000 }, { 390, 844 }, { 430, 932 }, { 360, 640 },
+                    { 320, 568 }, { 768, 1024 }, { 1024, 768 }, { 834, 1194 },
+                    { 852, 393 }, { 844, 390 }, { 1280, 800 }, { 1920, 1080 },
+                    { 2560, 1440 }, { 3440, 1440 }, { 0, 0 },
+                }
+                for _, wh in ipairs(sizes) do
+                    local v = scale(LAYOUT.compute(wh[1], wh[2]))
+                    expect(v >= 1 - 1e-9).is(true)
+                    expect(v <= MOST + 1e-9).is(true)
+                end
+                -- Monotone the other way from crtEase: a SMALLER card never
+                -- gets a smaller corner.
+                local last = math.huge
+                for w = 320, 2560, 40 do
+                    local v = scale(LAYOUT.compute(w, 800))
+                    expect(v <= last + 1e-9).is(true)
+                    last = v
+                end
+                -- A `most` of 1 is the switch that turns compensation off,
+                -- the way `small` of 1 turns the CRT easing off.
+                expect(math.abs(LAYOUT.cornerScale(phone, FLOOR, 1) - 1)).lessThan(1e-6)
+                -- The glyph on screen is what this is about, so the number a
+                -- reader would measure is asserted directly: about 7px before
+                -- and at the floor after.
+                expect(LAYOUT.RANK_CAP * phone.fit).lessThan(8)
+            end)
             test.case('a zero viewport still computes', function(expect)
                 local g = LAYOUT.compute(0, 0)
                 expect(g.cw > 0).is(true)

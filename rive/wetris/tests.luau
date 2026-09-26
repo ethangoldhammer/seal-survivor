@@ -28,11 +28,11 @@ local function fakeEngine()
         end,
         play = function(_src: any): any
             table.insert(e.starts, e.now)
-            return { volume = 1, completed = function() return false end }
+            return { volume = 1, completed = function() return false end, stop = function() end }
         end,
         playAtTime = function(_src: any, at: number): any
             table.insert(e.starts, at)
-            return { volume = 1, completed = function() return false end }
+            return { volume = 1, completed = function() return false end, stop = function() end }
         end,
     }
     return e
@@ -426,6 +426,51 @@ return function(): Tests
                 run(e, { MUSIC.new() }, 1)
                 expect(#e.starts).is(1)
                 expect(e.starts[1] < 3).is(true)
+            end)
+
+            test.case('a frozen clock waits, then starts ONE copy when it moves', function(expect)
+                -- the iPad: the browser holds the audio suspended until a touch
+                local e = fakeEngine()
+                MUSIC.reset()
+                MUSIC.loadSource({}, LOOP)
+                MUSIC.fresh()
+                local b = MUSIC.new()
+                for _ = 1, 300 do
+                    MUSIC.step(b, 1 / 60, 0.5)
+                end
+                expect(#e.starts).is(0)
+                e.now = 30
+                run(e, { b }, 31)
+                expect(#e.starts).is(1)
+                expect(e.starts[1] < 30.2).is(true)
+                run(e, { b }, 400)
+                expect(overlaps(e.starts)).is(false)
+            end)
+
+            test.case('a page mount on an old engine starts at once, not at the next grid point', function(expect)
+                local e = fakeEngine()
+                MUSIC.reset()
+                MUSIC.loadSource({}, LOOP)
+                e.now = 500
+                local b = MUSIC.new()
+                run(e, { b }, 500.1)
+                MUSIC.fresh()
+                run(e, { b }, 501)
+                expect(#e.starts).is(1)
+                expect(e.starts[1] < 500.3).is(true)
+            end)
+
+            test.case('after stop, nothing more is scheduled', function(expect)
+                local e = fakeEngine()
+                MUSIC.reset()
+                MUSIC.loadSource({}, LOOP)
+                e.now = 0.4
+                local b = MUSIC.new()
+                run(e, { b }, 5)
+                local n = #e.starts
+                MUSIC.stop()
+                run(e, { b }, 600)
+                expect(#e.starts).is(n)
             end)
         end)
 

@@ -125,6 +125,7 @@ type Board = {
     cellAt: { { number } },         -- the piece's cell centres as drawn this frame
     cellVel: { { number } },        -- ...and how fast each is moving, px/s
     drips: DRIPS.Drips,
+    burstCells: { DRIPS.BurstCell },
     sound: SOUND.Sound,
     music: MUSIC.Music,
     wasOver: boolean,
@@ -159,6 +160,8 @@ type Board = {
     linesProp: any,
     levelProp: any,
     labProp: any,
+    quitProp: any,
+    quitHeard: number,      -- the last `quit` state acted on: 0, -1 or 1
     -- THE READOUT'S LIFE: the score as shown (it counts up to the real one),
     -- the pop a clear gives the whole readout (a spring back to 0), and the
     -- ring a level-up throws off the level badge.
@@ -382,6 +385,10 @@ local function landed(self: Board, box: { number }, hard: number)
             PUDDLE.splash(goo, self.ox + w / 2, ry, w / 2, c / 2, 0.8 + 0.2 * big,
                 math.floor(3 * T.gooSplash + 0.5), 0.35, 0.7)
         end
+        -- THE GOO EXPLOSION: every cleared cell blows apart in the colour it
+        -- had evolved to (stampInk measured it before the rows went).
+        DRIPS.burst(self.drips, self.burstCells, T.burstCount * (0.8 + 0.2 * g.lastClear),
+            T.burstSpeed * c, T.burstSize * c, T.burstLife, c)
         local first = g.clearedRows[1]
         ripple(self, self.ox + w / 2, self.oy + (first - 0.5) * c, 0.8 + 0.7 * big)
         self.energy = math.max(self.energy, 0.6 + 0.9 * big)
@@ -424,8 +431,23 @@ local function landingCells(self: Board): { { number } }
     return if ghost ~= nil then WET.cellsOf(ghost) else {}
 end
 
-local function stampInk(self: Board, cells: { { number } }, kind: number)
+-- `before` is the well as it stood before the lock: a clear's burst takes
+-- each cleared cell's colour from it, as evolved as it had got, before the
+-- ink shifts the rows away.
+local function stampInk(self: Board, cells: { { number } }, kind: number, before: { { number } })
     local g = self.game
+    table.clear(self.burstCells)
+    if g.lastClear > 0 then
+        local c = self.cell
+        for _, row in g.clearedRows do
+            for col = 1, WET.W do
+                table.insert(self.burstCells, {
+                    x = self.ox + (col - 0.5) * c, y = self.oy + (row - 0.5) * c,
+                    rgb = INK.evolved(self.ink, before, cells, kind, row, col, self.time, T.mixTime, T.mixReach),
+                })
+            end
+        end
+    end
     INK.lock(self.ink, cells, kind, if g.lastClear > 0 then g.clearedRows else {}, self.time)
 end
 
@@ -433,8 +455,10 @@ local function lockNow(self: Board)
     local x0, y0, x1, y1 = pieceBox(self, WET.ghost(self.game))
     local cells = landingCells(self)
     local kind = if self.game.piece ~= nil then (self.game.piece :: WET.Piece).kind else 1
+    local before = table.clone(self.game.cells)
+    for r, row in before do before[r] = table.clone(row) end
     WET.lock(self.game)
-    stampInk(self, cells, kind)
+    stampInk(self, cells, kind, before)
     landed(self, { x0, y0, x1, y1 }, 0)
 end
 
@@ -444,8 +468,10 @@ local function hardDrop(self: Board)
     local x0, y0, x1, y1 = pieceBox(self, WET.ghost(g))
     local cells = landingCells(self)
     local kind = if g.piece ~= nil then (g.piece :: WET.Piece).kind else 1
+    local before = table.clone(g.cells)
+    for r, row in before do before[r] = table.clone(row) end
     local rows = WET.hardDrop(g)
-    stampInk(self, cells, kind)
+    stampInk(self, cells, kind, before)
     if rows > 0 then
         -- The streak: a bow wave down the whole fall, for a moment, the width
         -- of the piece — the card flight's wake, rotated into a well.
@@ -588,9 +614,15 @@ local function onReadout(self: Board, x: number, y: number): boolean
 end
 
 local function pointerDown(self: Board, event: PointerEvent)
-    if self.gestureId >= 0 or self.panelGesture then
+    if self.panelGesture then
         return
     end
+    -- A press while a gesture is still held means that gesture ended without
+    -- telling us — the web runtime passes a touchcancel on to nobody, and an
+    -- Apple Pencil's touches are cancelled by the system freely. Refusing
+    -- the new press left the board deaf to every touch after one; the new
+    -- press takes over instead. (A second finger during a drag takes over
+    -- too, which is a fair reading of a second finger.)
     -- The panel first: an overlay, and a press inside it never reaches the
     -- board beneath.
     local at = event.position
@@ -897,6 +929,7 @@ local function init(self: Board, context: Context): boolean
         self.linesProp = vm:getString('lines')
         self.levelProp = vm:getString('level')
         self.labProp = vm:getString('lab')
+        self.quitProp = vm:getNumber('quit')
         writeReadout(self)
         TUNER.build(self.panel, self.tunerRow, self.tunerHead)
         local ok, made = pcall(function(): Artboard<Data.Board>
@@ -1087,6 +1120,7 @@ local function shedGoo(self: Board, dt: number)
     end
     DRIPS.step(self.drips, dt, { cells = g.cells, ox = self.ox, oy = self.oy, cell = c }, self.ink,
         T.dripGravity * c, T.dripDrag, T.dripStain)
+    DRIPS.stepBursts(self.drips, dt, T.burstGravity * c, T.burstDrag)
 end
 
 -- WHERE THE SEAL GOES. The station is beside the well at the piece's
@@ -1217,6 +1251,25 @@ local function advance(self: Board, dt: number): boolean
     -- which runs twice (sealitaire's music learned that one the hard way).
     if not self.music.tried and self.context ~= nil then
         MUSIC.load(self.music, self.context :: Context)
+    end
+    -- THE PAGE'S TWO WORDS, through `quit` (ui/wetrisTable.js):
+    --   -1  "I just mounted you, and nothing of yours is playing" — so the
+    --       loop starts now, rather than waiting out a rebuild's orphan that
+    --       is not there (music.luau cannot tell the two apart by itself)
+    --    1  "I am about to tear you down" — everything this board set
+    --       sounding stops now, before it can't
+    -- Levels, not edges: a word said before this board first looked is
+    -- still heard. The CLI viewer never says either, and keeps music.luau's
+    -- rebuild handover.
+    local quit = self.quitProp
+    if quit ~= nil and quit.value ~= self.quitHeard then
+        self.quitHeard = quit.value
+        if quit.value < 0 then
+            MUSIC.fresh()
+        elseif quit.value > 0 then
+            MUSIC.stop()
+            SOUND.stopAll(self.sound)
+        end
     end
     MUSIC.step(self.music, dt, T.musicVolume)
     padStep(self, dt)
@@ -1802,6 +1855,7 @@ return function(context: Context): Layout<Board>
         cellAt = {},
         cellVel = {},
         drips = DRIPS.new(),
+        burstCells = {},
         sound = SOUND.new(),
         music = MUSIC.new(),
         wasOver = false,
@@ -1836,6 +1890,8 @@ return function(context: Context): Layout<Board>
         linesProp = nil,
         levelProp = nil,
         labProp = nil,
+        quitProp = nil,
+        quitHeard = 0,
         shownScore = 0,
         pop = 0, popV = 0,
         glow = 0,

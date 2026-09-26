@@ -332,6 +332,13 @@
         <ViewModelPropertyNumber name="shadowSoft" id="0:344"/>
         <ViewModelPropertyNumber name="shadowX" id="0:345"/>
         <ViewModelPropertyNumber name="shadowY" id="0:346"/>
+        <!-- HOW BIG THE CORNER IS RELATIVE TO THE CARD, set by the table from
+             LAYOUT.cornerScale: 1 at the design size and up from there as the
+             card shrinks, so the rank's capitals never fall below the floor in
+             tuning.luau. It scales the rank and the suit TOGETHER (one node
+             wraps both in table-cards.rml) — they are one mark and the
+             relationship between them is Ethan's. -->
+        <ViewModelPropertyNumber name="cornerScale" id="0:350"/>
         <ViewModelInstance exports="true" name="Instance" id="0:330">
             <ViewModelInstanceString propertyValue="A" viewModelPropertyId="0:321" id="0:331"/>
             <ViewModelInstanceColor propertyValue="FFD0392B" viewModelPropertyId="0:322" id="0:332"/>
@@ -347,6 +354,10 @@
             <ViewModelInstanceNumber propertyValue="8" viewModelPropertyId="0:344" id="0:347"/>
             <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:345" id="0:348"/>
             <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:346" id="0:349"/>
+            <!-- A property with no row here is nil at runtime, silently and
+                 with a clean build; 1 is also the right value for the editor,
+                 where the card is looked at at its design size. -->
+            <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:350" id="0:351"/>
         </ViewModelInstance>
     </ViewModel>
 

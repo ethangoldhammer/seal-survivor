@@ -84,7 +84,7 @@ function setApi(present, { active = false } = {}) {
   document.fullscreenElement = active ? el : null;
 }
 
-const { showSealitaire, hideSealitaire } = await import('../path/src/ui/sealitaireTable.js');
+const { showSealitaire, hideSealitaire, tableDpr } = await import('../path/src/ui/sealitaireTable.js');
 const findBtn = () => document.querySelector('.sv-sealitaire button[aria-label], .sv-sealitaire .sv-fsbtn, .sv-sealitaire button:not(.sv-sealitaire-back)');
 
 console.log('the fullscreen button on the table:');
@@ -113,6 +113,49 @@ showSealitaire({});
 check('no button on a shell with no fullscreen API', findBtn() === null);
 hideSealitaire();
 check('and closing there asks nothing of the missing API', exits.length === 0);
+
+// ---------------------------------------------------------------------------
+console.log('\nthe resolution the table renders at:');
+// ---------------------------------------------------------------------------
+// The other half of a phone that cannot read its own cards. The board lays
+// out in CSS pixels, so a landscape iPhone puts the card at 47% of its design
+// size and the corner's rank at about 7px; rendering that at 2x on a 3x
+// display throws away a third of the resolution the glass has, on the one
+// element that is already at the edge of legible. LAYOUT.cornerScale makes
+// the glyph bigger; this is whether it is drawn sharp.
+//
+// The guard that has to survive raising the cap is the AREA one — the table
+// is eight full-screen shader passes a frame, and the case it is there for is
+// a fullscreen 5K window, not a phone. So both ends are asserted: a small
+// viewport gets everything the display has, and a large one is still held.
+const asCanvas = (w, h) => ({ getBoundingClientRect: () => ({ width: w, height: h }) });
+const at = (dpr, w, h) => {
+  dom.window.devicePixelRatio = dpr;
+  return tableDpr(asCanvas(w, h));
+};
+
+// A landscape iPhone, which is the whole reason this moved.
+check('a 3x phone renders at 3x', Math.abs(at(3, 852, 393) - 3) < 1e-9, `${at(3, 852, 393)}`);
+check('...which is fewer device pixels than a retina laptop already pays',
+  852 * 393 * 9 < 1512 * 982 * 4,
+  `${Math.round(852 * 393 * 9 / 1e5) / 10}M vs ${Math.round(1512 * 982 * 4 / 1e5) / 10}M`);
+// A 2x laptop is untouched: it was never the case the cap was aimed at.
+check('a 2x laptop is unchanged', Math.abs(at(2, 1512, 982) - 2) < 1e-9, `${at(2, 1512, 982)}`);
+// The area guard still bites where it always did.
+const bigWindow = at(2, 2560, 1440);
+check('a 5K window is still held under the pixel budget', bigWindow < 2,
+  `${Math.round(bigWindow * 1000) / 1000}x on 2560x1440`);
+check('...and that budget is 3840x2160 device pixels',
+  Math.abs(2560 * bigWindow * (1440 * bigWindow) - 3840 * 2160) < 1,
+  `${Math.round(2560 * bigWindow * 1440 * bigWindow / 1e6)}M`);
+// A panel that reports more than 3 is capped: a 4x phone is 78% more pixels
+// again for a difference nobody can see, and that IS the case the ratio cap
+// is for now.
+check('a 4x panel is capped at 3', Math.abs(at(4, 852, 393) - 3) < 1e-9, `${at(4, 852, 393)}`);
+// A canvas with no box yet — the first call happens before layout — must not
+// divide by zero and must not return 0, which would build zero-sized targets.
+dom.window.devicePixelRatio = 3;
+check('a canvas with no box yet still answers', tableDpr(asCanvas(0, 0)) === 3);
 
 console.log('');
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }

@@ -79,17 +79,29 @@ const RIV_URL = assetUrl('/sealitaire.riv');
 let mounted = null;
 
 // ---------------------------------------------------------------------------
-// THE PIXEL RATIO IS CAPPED. The table is about eight full-screen shader passes
-// a frame (water, surface, seal x2, mask, scene, CRT, plus the half-size goo and
-// foam), every one of them sized in DEVICE pixels — table.luau's resize builds
-// them at layout size x this ratio. A 3x phone is 2.25x the pixels of 2x for a
-// difference nobody can see at arm's length, and a fullscreen 5K window is 14M
-// pixels a pass. So: never more than 2, and never more than PIXEL_BUDGET device
-// pixels, whichever is lower. An ordinary retina laptop sits under both and
-// renders exactly as before.
-const MAX_DPR = 2;
+// THE PIXEL RATIO IS CAPPED, but by AREA first. The table is about eight
+// full-screen shader passes a frame (water, surface, seal x2, mask, scene, CRT,
+// plus the half-size goo and foam), every one of them sized in DEVICE pixels —
+// table.luau's resize builds them at layout size x this ratio. A fullscreen 5K
+// window is 14M pixels a pass, so PIXEL_BUDGET is the real guard and it is
+// expressed in the thing that actually costs: total device pixels.
+//
+// MAX_DPR WAS 2, AND ON A PHONE THAT WAS THE WRONG TRADE. The note it carried
+// said a 3x phone is 2.25x the pixels for a difference nobody can see at arm's
+// length. That is true of the water and false of a rank glyph: a landscape
+// iPhone lays the board out at 852x393 CSS px, which puts the card at 47% of
+// its design size and the corner's rank at about 10px — rendered at 2x and
+// shown on a 3x display, so a third of the resolution the glass has is thrown
+// away on the one element that is already at the edge of legible.
+//
+// And the phone was never the expensive case. At 3x a landscape iPhone is
+// 2556x1179 = 3.0M device pixels; a 14" MacBook at its default scaling is
+// 3024x1964 = 5.9M and has always rendered at full ratio. The small viewport is
+// what keeps the count down, which is exactly what PIXEL_BUDGET measures. So
+// the ratio cap is only here to stop a 4x panel, and the budget does the rest.
+const MAX_DPR = 3;
 const PIXEL_BUDGET = 3840 * 2160;
-function tableDpr(canvas) {
+export function tableDpr(canvas) {
   const want = Math.min(window.devicePixelRatio || 1, MAX_DPR);
   const { width, height } = canvas.getBoundingClientRect();
   const area = width * height;
@@ -260,6 +272,79 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
 
   canvas.addEventListener('pointerdown', () => canvas.focus());
 
+  // A HOVERING PENCIL IS NOT A MOUSE. The runtime forwards every mousemove
+  // as a pointer move, pressed or not, and table.luau reads a move with
+  // nothing held as proof of a mouse ("only a mouse does this"): it drops
+  // the touch lift and pops and blips every card the pointer crosses. An
+  // Apple Pencil hovering over an iPad sends exactly those moves. So an
+  // unpressed mouse event whose pointer was a pen or a finger never reaches
+  // the canvas — a real mouse's hover still does — and neither does the
+  // mouse echo a browser may send after a touch. Pointer events arrive
+  // before their mouse twins, which is how the type is known; stopped on the
+  // wrap in the capture phase, which runs before the canvas's listeners.
+  // wetrisTable.js drops every unpressed move, having no hover to keep.
+  let pointerType = 'mouse';
+  let touchedAt = -Infinity;
+  const notePointer = (e) => { pointerType = e.pointerType || 'mouse'; };
+  const onTouch = () => { touchedAt = performance.now(); };
+  const dropMouse = (e) => {
+    const echo = performance.now() - touchedAt < 800;
+    const penHover = pointerType !== 'mouse' && e.buttons === 0
+      && (e.type === 'mousemove' || e.type === 'mouseover');
+    if (echo || penHover) e.stopPropagation();
+  };
+  for (const t of ['pointerover', 'pointermove', 'pointerdown']) wrap.addEventListener(t, notePointer, true);
+  for (const t of ['touchstart', 'touchend', 'touchcancel']) wrap.addEventListener(t, onTouch, true);
+  for (const t of ['mousemove', 'mouseover', 'mousedown', 'mouseup']) wrap.addEventListener(t, dropMouse, true);
+
+  // ---------------------------------------------------------------------
+  // `touchcancel` HAS TO BE FORWARDED BY HAND.
+  //
+  // The runtime listens for it and its entire handler is `_primaryTouchId =
+  // null` — it releases its own single-finger lock and tells the artboard
+  // NOTHING. No pointerUp, no exit. So every way a phone takes a touch away
+  // mid-gesture (a system edge swipe, the URL bar sliding, an incoming call,
+  // a long-press menu) ends a card drag with the card still in the air and
+  // the script still believing there is a finger on it.
+  //
+  // table.luau recovers on the next press either way — under single-touch
+  // mode a press with a new id is proof the old finger is gone, so it puts
+  // the held run back before starting the new gesture. This is so the card
+  // goes home AT THE CANCEL rather than hanging there until the screen is
+  // touched again, which is the part that reads as broken rather than odd.
+  //
+  // Done by replaying the lift as a `touchend`, so the runtime's own handler
+  // does the work and nothing here depends on its internals beyond the one
+  // fact above: its cancel listener has already cleared the primary id, and
+  // with no primary id it takes the first touch of `changedTouches`. The
+  // Touch constructor is not on every browser, hence the guard — where it is
+  // missing, the next press is still the recovery.
+  let lastTouch = null;
+  const trackTouch = (e) => {
+    const t = e.changedTouches?.[0];
+    if (t) lastTouch = { x: t.clientX, y: t.clientY, id: t.identifier };
+  };
+  const onTouchCancel = () => {
+    if (!lastTouch || typeof Touch !== 'function' || typeof TouchEvent !== 'function') return;
+    try {
+      const t = new Touch({
+        identifier: lastTouch.id, target: canvas,
+        clientX: lastTouch.x, clientY: lastTouch.y,
+        screenX: lastTouch.x, screenY: lastTouch.y,
+        pageX: lastTouch.x, pageY: lastTouch.y,
+      });
+      canvas.dispatchEvent(new TouchEvent('touchend', {
+        changedTouches: [t], touches: [], targetTouches: [],
+        bubbles: true, cancelable: true,
+      }));
+    } catch {
+      /* no Touch constructor here; the next press is the recovery */
+    }
+  };
+  canvas.addEventListener('touchstart', trackTouch, { passive: true });
+  canvas.addEventListener('touchmove', trackTouch, { passive: true });
+  canvas.addEventListener('touchcancel', onTouchCancel);
+
   let settle = 0;
   const onResize = () => {
     clearTimeout(settle);
@@ -271,7 +356,7 @@ export async function showSealitaire({ parent, onExit, onPause, onProgress } = {
 
   // Filled in now that there is a runtime to tear down. The handle itself
   // was published before the download (see above), so this only adds.
-  Object.assign(mounted, { rive, onResize, canvas, cancelSettle: () => clearTimeout(settle) });
+  Object.assign(mounted, { rive, onResize, canvas, trackTouch, onTouchCancel, cancelSettle: () => clearTimeout(settle) });
   return mounted;
 }
 
@@ -360,11 +445,17 @@ async function fetchRiv(onProgress) {
  */
 export function hideSealitaire() {
   if (!mounted) return;
-  const { wrap, rive, onResize, onKey, fsBtn, cancelSettle } = mounted;
+  const { wrap, rive, onResize, onKey, fsBtn, cancelSettle, canvas, trackTouch, onTouchCancel } = mounted;
   mounted = null;
   cancelSettle();
   if (onResize) window.removeEventListener('resize', onResize);
   window.removeEventListener('keydown', onKey, true);
+  // Null when the table was closed mid-download, like `rive` below.
+  if (canvas && trackTouch) {
+    canvas.removeEventListener('touchstart', trackTouch);
+    canvas.removeEventListener('touchmove', trackTouch);
+    canvas.removeEventListener('touchcancel', onTouchCancel);
+  }
   // THE TEARDOWN IS HERE, not in the Back handler, because Back is only one
   // of the ways out — the menu closes the table directly. Giving the screen
   // back matters: staying fullscreen would drop the player into the menu with

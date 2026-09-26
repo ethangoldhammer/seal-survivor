@@ -42,6 +42,20 @@ local CARD_H = 168
 local COLS = 7
 local ASPECT = CARD_H / CARD_W
 
+-- THE RANK GLYPH'S CAP HEIGHT, in card units, read off the markup rather than
+-- guessed: table-cards.rml draws the Corner's rank in Brygada 1918 at 53
+-- under `Rank_ROOT`, which is scaled 0.4, and a serif's capitals are close
+-- enough to 0.7 of the em. 53 * 0.4 * 0.7. It is the height a reader actually
+-- sees — not the em box, which is half again as tall and would put the floor
+-- below in the wrong place by a third.
+--
+-- A card is drawn at `fit` times its design size, so the glyph on screen is
+-- this times `fit`: 14.8px on the desktop, 7px on a landscape phone. That
+-- second number is the bug M.cornerScale exists for.
+-- Exported so tests can assert the pixel height a reader actually sees,
+-- rather than re-typing 14.8 in a second file for the two to drift apart.
+M.RANK_CAP = 53 * 0.4 * 0.7
+
 -- The gap between columns, as a fraction of a card's width (24/120).
 local GAP_RATIO = 0.2
 
@@ -382,6 +396,37 @@ function M.crtEase(g: Geom, small: number, smallFit: number, fullFit: number): n
     local lo = math.min(hi - 0.01, smallFit)
     local u = math.max(0, math.min(1, (g.fit - lo) / (hi - lo)))
     return math.min(1, small + (1 - small) * (u * u * (3 - 2 * u)))
+end
+
+-- THE CORNER COMPENSATES, where the CRT eases off.
+--
+-- Same problem, opposite answer, and the pair is worth reading together. The
+-- CRT is decoration over the card, so when the card shrinks the decoration
+-- goes away. The rank and suit in the corner are the card's ONLY writing —
+-- they are the thing the treatment is decorating — so when the card shrinks
+-- they have to hold their size instead, and the card gives up face to them.
+--
+-- Stated as a floor in SCREEN PIXELS rather than as a curve, because that is
+-- the fact being asserted: a glyph is legible at arm's length or it is not,
+-- and the number is the same on every device. Everything else is derived, so
+-- there is nothing here to keep in step with the markup by hand.
+--
+-- At 1600x1000 the card is 120 wide, `fit` is 1 and the rank is drawn at its
+-- design size; the floor is already met, this returns exactly 1, and the
+-- desktop is untouched. A landscape iPhone lays the board out at `fit` 0.47,
+-- which puts the same glyph at 7px — half the floor — and it grows.
+--
+-- `most` is the other end, and it is a LOOK limit rather than a legibility
+-- one: the corner is drawn over the card's face, so past some scale it stops
+-- being a corner and starts covering the creatures that are the card's whole
+-- idea. A phone that cannot have both gets the biggest corner the face can
+-- carry, and the rest of the answer is the card itself being bigger.
+function M.cornerScale(g: Geom, floorPx: number, most: number): number
+    local at = M.RANK_CAP * g.fit
+    if at <= 0 then
+        return 1
+    end
+    return clamp(floorPx / at, 1, math.max(1, most))
 end
 
 -- Where the title is DRAWN, which is inside its hot zone rather than at its

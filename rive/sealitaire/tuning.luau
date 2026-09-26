@@ -256,6 +256,13 @@ local rows: { Row } = {
     { key = 'crtSmall', min = 0, max = 1, value = 0.35, cat = 'crt' },                -- what survives at the smallest card; 1 is no easing at all, 0 is no CRT on a phone
     { key = 'crtSmallFit', min = 0.2, max = 1, value = 0.55, cat = 'crt' },           -- the `fit` at which only `crtSmall` is left (a phone in landscape is about here)
     { key = 'crtFullFit', min = 0.5, max = 1.5, value = 0.9, cat = 'crt' },           -- the `fit` at and above which the look is exactly as tuned
+    -- AND THE CORNER GOES THE OTHER WAY. The three rows above take the
+    -- decoration off a small card; these two put the WRITING back on it. The
+    -- floor is in screen pixels because that is what legibility is measured
+    -- in — at the desktop's `fit` the rank is already 14.8px tall, so the
+    -- floor is met, the scale is exactly 1 and nothing there moves.
+    { key = 'cornerFloor', min = 6, max = 20, value = 12, cat = 'crt' },             -- the smallest the rank's capitals may be ON SCREEN, in px; the corner grows until they are this tall
+    { key = 'cornerMax', min = 1, max = 2.5, value = 1.7, cat = 'crt' },             -- and the most it may grow, because past this the corner covers the card's own picture
     { key = 'curve', min = 0, max = 0.15, value = 0.012903, cat = 'crt' },
     { key = 'scanlines', min = 0, max = 1, value = 0.18968, cat = 'crt' },
     { key = 'aberration', min = 0, max = 0.02, value = 0, cat = 'crt' },

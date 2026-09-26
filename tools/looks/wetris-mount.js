@@ -5,10 +5,19 @@
 //   npm run looks:wetris        build + serve on :4757
 //   ?riv=/other.riv             swap the file, same mount (the fetch is redirected)
 //   ?sound=1                    let it make noise (muted otherwise)
+//   ?raf=timer                  drive frames from a 16ms timer — the Browser
+//                               pane runs ~2 rAF a second, so anything that
+//                               waits on the board's next frames (backing
+//                               out stops the music that way) needs this
 //
 // window.__log holds every console line, so a harness can read what the
 // runtime said (a dead script, a shader that did not compile) without eyes.
-import { showWetris, wetrisAvailable } from '../../path/src/ui/wetrisTable.js';
+import { showWetris, hideWetris, wetrisAvailable } from '../../path/src/ui/wetrisTable.js';
+
+if (new URLSearchParams(location.search).get('raf') === 'timer') {
+  window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+  window.cancelAnimationFrame = (id) => clearTimeout(id);
+}
 
 // MUTED UNLESS ASKED (?sound=1). This page is a test harness, loaded in the
 // Browser pane while someone is working, and the loop and every lock were
@@ -33,6 +42,37 @@ if (new URLSearchParams(location.search).get('sound') !== '1') {
     return realConnect.call(this, dest, ...rest);
   };
 }
+
+// AN AUDIO TAP, patched AFTER the mute above so it wraps it: it sees the speakers first, so the harness can answer "is it
+// still playing" without anyone hearing it: window.__audio() is each
+// context's state and level. window.__hide() backs out the way the game does.
+const taps = [];
+{
+  const realConnect = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (dest, ...rest) {
+    if (dest instanceof AudioDestinationNode) {
+      let tap = taps.find((t) => t.ctx === dest.context);
+      if (!tap) {
+        const analyser = dest.context.createAnalyser();
+        analyser.fftSize = 2048;
+        tap = { ctx: dest.context, analyser, buf: new Float32Array(2048) };
+        taps.push(tap);
+      }
+      realConnect.call(this, tap.analyser);
+    }
+    return realConnect.call(this, dest, ...rest);
+  };
+}
+window.__audio = () => taps.map((t) => {
+  t.analyser.getFloatTimeDomainData(t.buf);
+  let sum = 0;
+  for (const v of t.buf) sum += v * v;
+  return { state: t.ctx.state, rms: +Math.sqrt(sum / t.buf.length).toFixed(4) };
+});
+window.__hide = () => hideWetris();
+// And back in, the way the Club seal row does — a second mount on the same
+// page, sharing the first one's audio engine.
+window.__show = () => showWetris({ parent: document.getElementById('uiroot'), onExit: () => {} });
 
 window.__log = [];
 for (const k of ['log', 'warn', 'error']) {

@@ -145,6 +145,16 @@ local function voice(s: Sound, src: AudioSource?, vol: number, at: number)
     end
 end
 
+-- Every one-shot still sounding, stopped: the board is going away.
+function M.stopAll(s: Sound)
+    for _, snd in s.recent do
+        pcall(function()
+            snd:stop()
+        end)
+    end
+    s.recent = {}
+end
+
 -- Play `event` at rung `k` (-2..2; ignored without a ladder), `level` 0..1 on
 -- top of its gain, `later` seconds after its own delay.
 function M.play(s: Sound, event: string, k: number?, level: number?, later: number?)

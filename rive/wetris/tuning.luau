@@ -120,6 +120,13 @@ local rows: { Row } = {
     { key = 'dripStretch', min = 0, max = 0.1, value = 0.05485, cat = 'drips' },         -- seconds of travel the tail trails by: the faster a drop falls the longer its teardrop
     { key = 'dripIso', min = 0.1, max = 0.9, value = 0.35, cat = 'drips' },            -- the metaball threshold: lower welds drops sooner
     { key = 'dripHeight', min = 0, max = 12, value = 1.2317, cat = 'drips' },               -- how domed a bead's shading is
+    -- the goo explosion a cleared line blows apart into (drips.luau bursts), each drop its cell's evolved colour
+    { key = 'burstCount', min = 0, max = 4, value = 1.6, cat = 'burst' },              -- drops per cleared cell (48 alive at most across a clear)
+    { key = 'burstSpeed', min = 0, max = 60, value = 24, cat = 'burst' },              -- CELLS per second the fastest leaves at
+    { key = 'burstSize', min = 0.05, max = 0.6, value = 0.32, cat = 'burst' },          -- radius, in CELLS, at birth
+    { key = 'burstLife', min = 0.05, max = 1.5, value = 0.4, cat = 'burst' },          -- seconds a drop lives, shrinking to nothing
+    { key = 'burstDrag', min = 0, max = 15, value = 6, cat = 'burst' },                -- per second: high is a sharp pop that stalls
+    { key = 'burstGravity', min = 0, max = 80, value = 10, cat = 'burst' },            -- CELLS per second squared
     -- the sound (sound.luau): the takes are sealitaire's, already through its
     -- bank-wide low-pass; the bus is a reverb crossfaded down four baked cutoffs
     { key = 'musicVolume', min = 0, max = 1, value = 0.5, cat = 'sound' },            -- the loop (music.luau)

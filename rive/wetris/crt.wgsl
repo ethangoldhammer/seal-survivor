@@ -51,7 +51,7 @@ struct U {
     look4: vec4f,  // skirt tint, skirt reach (of a cell), -, -
     cells: array<vec4f, 200>,
     free: array<vec4f, 48>,    // cx, cy, size, turn | rgb, alpha
-    drips: array<vec4f, 128>,  // x, y, r, alpha | rgb, -
+    drips: array<vec4f, 192>,  // x, y, r, alpha | rgb, -
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -335,7 +335,7 @@ fn gooAt(pp: vec2f, uv: vec2f, gels: array<Gel, 2>, cellPx: f32) -> Goo {
     var f = 0.0;
     var g = vec2f(0.0);
     var acc = vec3f(0.0);
-    for (var i = 0; i < 64; i++) {
+    for (var i = 0; i < 96; i++) {
         if (i >= n) { break; }
         let d0 = u.drips[i * 2];
         let R = max(d0.z * 2.2, 0.5);

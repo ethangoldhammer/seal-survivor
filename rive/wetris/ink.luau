@@ -51,7 +51,7 @@ M.CELLS_AT = 176    -- 200 cells: rgb, ripeness (-1 empty)
 M.MAX_FREE = 24
 M.FREE_AT = M.CELLS_AT + WET.W * WET.H * 16
 -- Metaball SLOTS, not drips: a falling drip takes two (a head and a tail).
-M.MAX_DRIPS = 64
+M.MAX_DRIPS = 96
 M.DRIPS_AT = M.FREE_AT + M.MAX_FREE * 32
 M.UBO_SIZE = M.DRIPS_AT + M.MAX_DRIPS * 32
 
@@ -168,6 +168,71 @@ function M.write(ink: Ink, cells: { { number } }, b: buffer, now: number,
             end
         end
     end
+end
+
+-- THE COLOUR A CLEARED CELL HAD EVOLVED TO, as crt.wgsl's inkAt draws it at
+-- the cell's centre (less the swirl, which averages out over a cell): its own
+-- colour run into its ripe neighbours', with the chroma lift that keeps the
+-- blend from going to mud. Called BEFORE the lock is stamped, on the board
+-- as it stood: `before` is the well before the lock, and `fresh` the piece's
+-- cells, which are in the rows being cleared but not yet in the ink — they
+-- count as just locked, crisp in their kind's colour.
+function M.evolved(ink: Ink, before: { { number } }, fresh: { { number } }, kind: number,
+                   row: number, col: number, now: number, mixTime: number, reach: number): { number }
+    local tau = math.max(0.05, mixTime)
+    local function at(r: number, c: number): ({ number }?, number)
+        if r < 1 or r > WET.H or c < 1 or c > WET.W then
+            return nil, 0
+        end
+        for _, f in fresh do
+            if f[1] == c and f[2] == r then
+                return kindRgb(kind), 0
+            end
+        end
+        if before[r][c] > 0 then
+            return ink.rgb[r][c], 1 - math.exp(-math.max(0, now - ink.locked[r][c]) / tau)
+        end
+        return nil, 0
+    end
+    local own, ripe = at(row, col)
+    if own == nil then
+        return { 0.5, 0.5, 0.5 }
+    end
+    local rad = 0.3 + (math.max(0.3, reach) - 0.3) * ripe
+    local acc = { 0, 0, 0 }
+    local chroma, total = 0, 0
+    local function luma(c: { number }): number
+        return 0.2126 * c[1] + 0.7152 * c[2] + 0.0722 * c[3]
+    end
+    local function sat(c: { number }): number
+        local l = luma(c)
+        return math.sqrt((c[1] - l) ^ 2 + (c[2] - l) ^ 2 + (c[3] - l) ^ 2)
+    end
+    for dy = -2, 2 do
+        for dx = -2, 2 do
+            local rgb, w = at(row + dy, col + dx)
+            if rgb ~= nil then
+                local k = math.exp(-(dx * dx + dy * dy) / (rad * rad))
+                local wt = if dx == 0 and dy == 0 then 1 + (k - 1) * ripe else k * w * ripe
+                acc[1] += rgb[1] * wt
+                acc[2] += rgb[2] * wt
+                acc[3] += rgb[3] * wt
+                chroma += sat(rgb) * wt
+                total += wt
+            end
+        end
+    end
+    if total <= 1e-5 then
+        return table.clone(own)
+    end
+    local avg = { acc[1] / total, acc[2] / total, acc[3] / total }
+    local l = luma(avg)
+    local lift = math.clamp((chroma / total) / math.max(sat(avg), 1e-4), 1, 2.5)
+    return {
+        math.clamp(l + (avg[1] - l) * lift, 0, 1),
+        math.clamp(l + (avg[2] - l) * lift, 0, 1),
+        math.clamp(l + (avg[3] - l) * lift, 0, 1),
+    }
 end
 
 M.kindRgb = kindRgb

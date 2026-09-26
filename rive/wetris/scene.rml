@@ -116,11 +116,19 @@
              stages a board for a screenshot (board.luau, stageLab). Blank in
              play. -->
         <ViewModelPropertyString name="lab" id="0:305"/>
+        <!-- THE PAGE'S TWO WORDS (ui/wetrisTable.js, read by board.luau):
+             -1 on mount, "nothing of yours is playing", so the loop starts at
+             once; 1 before teardown, "stop every sound you started" — the
+             loop above all, whose repeats are scheduled ahead on the audio
+             engine and outlive the artboard otherwise. 0 is the CLI viewer,
+             which says neither. -->
+        <ViewModelPropertyNumber name="quit" id="0:306"/>
         <ViewModelInstance exports="true" name="Instance" id="0:310">
             <ViewModelInstanceString propertyValue="1298479218" viewModelPropertyId="0:301" id="0:311"/>
             <ViewModelInstanceString propertyValue="0" viewModelPropertyId="0:302" id="0:312"/>
             <ViewModelInstanceString propertyValue="6" viewModelPropertyId="0:303" id="0:313"/>
             <ViewModelInstanceString propertyValue="" viewModelPropertyId="0:305" id="0:315"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:306" id="0:316"/>
         </ViewModelInstance>
     </ViewModel>
 

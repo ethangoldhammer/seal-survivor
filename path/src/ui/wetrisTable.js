@@ -113,12 +113,34 @@ export async function showWetris({ parent, onExit, onPause } = {}) {
     tabIndex: 0,
     layout: new Layout({ fit: Fit.Layout, alignment: Alignment.Center }),
     onLoad: () => {
+      // "Nothing of yours is playing" — see hideWetris and board.luau.
+      try {
+        const quit = rive.viewModelInstance?.number('quit');
+        if (quit) quit.value = -1;
+      } catch { /* no view model */ }
       loading.remove();
       rive.resizeDrawingSurfaceToCanvas();
       canvas.focus();
     },
   });
   canvas.addEventListener('pointerdown', () => canvas.focus());
+  // HOVER IS NOT A DRAG. Rive's web runtime forwards every mousemove as a
+  // pointer move, pressed or not, and an Apple Pencil hovering over an iPad
+  // sends a stream of them. Wetris has nothing that follows a hovering
+  // pointer, and a board still holding a gesture read the hover as a drag:
+  // the piece walked and the seal flicked its fin without end. So a mouse
+  // event with no button down never reaches the canvas, and neither does the
+  // mouse echo a browser may send after a touch. Stopped on the wrap in the
+  // capture phase, which runs before any listener on the canvas itself.
+  let touchedAt = -Infinity;
+  const onTouch = () => { touchedAt = performance.now(); };
+  const dropMouse = (e) => {
+    const echo = performance.now() - touchedAt < 800;
+    const hover = (e.type === 'mousemove' || e.type === 'mouseover') && e.buttons === 0;
+    if (echo || hover) e.stopPropagation();
+  };
+  for (const t of ['touchstart', 'touchend', 'touchcancel']) wrap.addEventListener(t, onTouch, true);
+  for (const t of ['mousemove', 'mouseover', 'mousedown', 'mouseup']) wrap.addEventListener(t, dropMouse, true);
   const onResize = () => rive.resizeDrawingSurfaceToCanvas();
   window.addEventListener('resize', onResize);
 
@@ -164,8 +186,30 @@ export function hideWetris() {
   mounted = null;
   window.removeEventListener('resize', onResize);
   window.removeEventListener('keydown', onKey, true);
-  try { rive.cleanup(); } catch { /* already gone */ }
-  wrap.remove();
+  // The board's music and sounds are the SCRIPT's: it starts them on the
+  // shared audio engine, where neither rive.volume nor cleanup() reaches, so
+  // they played on after the mode was gone. Ask the board to stop them
+  // (`quit` = 1, board.luau), hide it at once, and tear down only after it
+  // has had a few frames to act.
+  try {
+    const quit = rive.viewModelInstance?.number('quit');
+    if (quit) quit.value = 1;
+  } catch { /* already gone */ }
+  wrap.style.visibility = 'hidden';
+  wrap.style.pointerEvents = 'none';
+  // Three of the board's frames — or a second, if frames have stopped (a
+  // background tab), so the teardown itself can never be lost.
+  let done = false;
+  const teardown = () => {
+    if (done) return;
+    done = true;
+    try { rive.cleanup(); } catch { /* already gone */ }
+    wrap.remove();
+  };
+  let frames = 0;
+  const tick = () => (++frames >= 3 ? teardown() : requestAnimationFrame(tick));
+  requestAnimationFrame(tick);
+  setTimeout(teardown, 1000);
 }
 
 /** Is the board up? */

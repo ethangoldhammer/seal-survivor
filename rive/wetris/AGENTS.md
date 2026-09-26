@@ -42,7 +42,7 @@ npm run wetris:pull:apply  # ...and merge those attribute edits back into the .r
 | `tuner.rml` `fonts/Inter.ttf` | **COPIES of sealitaire's** (the row and header parts, and the font they name as `0:400` — which is why Abril is `0:420` here) |
 | `ink.luau` | the stack's colours running together, Blubberball's goo-pass idea on the well: each locked cell's clock (following its row down through every clear) and the rows crt.wgsl's `inkAt` reads. A piece lands crisp and ripens over `mixTime`; the mix keeps its saturation so a ripe stack marbles instead of going to mud. The stack is drawn grey into its own canvas and coloured in the shader, so only the hue runs. The same ripeness drives the FUSE: crt.wgsl's `stackAt` draws the stack as one smooth-union SDF, so touching tiles melt together as their colours run (`fuseReach` the threshold in cells, capped at half a cell by its 3x3 window; `fuseAmount` the melt, 0 is the old crisp tiles exactly). The goo SKIRT takes its blocks' colour too: goo.wgsl is shared so it stays teal, and crt.wgsl reads its canvas (binding 6) and dyes it with `skirtAt`, the nearby cells' and piece's colours (`skirtTint`, `skirtReach`) |
 | `tiles.luau` | the FREE tiles crt.wgsl draws — the live piece (its cells where they are drawn: glide AND turn, a rotation sweeping about the SRS pivot) and the previews — and which piece cells have open water under them to drip from |
-| `drips.luau` | the coloured goo the falling piece sheds, in three stages: it FORMS behind the piece at a point on its contour (undersides mostly, reckoned on screen so a turned piece drips from whatever faces down) and rides with it while it swells out past the edge; it FLIES once formed, with its point's velocity (glide and turn, capped by `dripFling`) and gravity; it LANDS on the pile, clings, sinks in and STAINS the cell (ink.luau). A piece that locks lets go of every drop still forming on it. crt.wgsl draws them behind the tiles as one metaball field, with a GEL term from every tile nearby so the goo bridges onto the piece it leaves and the pile it lands on |
+| `drips.luau` | the coloured goo the falling piece sheds, in three stages: it FORMS behind the piece at a point on its contour (undersides mostly, reckoned on screen so a turned piece drips from whatever faces down) and rides with it while it swells out past the edge; it FLIES once formed, with its point's velocity (glide and turn, capped by `dripFling`) and gravity; it LANDS on the pile, clings, sinks in and STAINS the cell (ink.luau). A piece that locks lets go of every drop still forming on it. crt.wgsl draws them behind the tiles as one metaball field, with a GEL term from every tile nearby so the goo bridges onto the piece it leaves and the pile it lands on. A line clear BURSTS: every cleared cell blows apart into goo that flies out and dies in under half a second (`burst` rows), each drop the colour its cell had evolved to — `INK.evolved`, inkAt's blend at the cell's centre, measured from the board as it stood before the lock |
 | `sfxEvents.csv` | which take plays for which event — sealitaire's hover blips, flick-plops and seal voices — with a gain, delay, minGap, and three columns of wetris's: `ladder` (p or h: play the take at a rung of its baked pitch ladder, the board picks the rung), `bus` (knock or blip: the reverb bus under it) and `send` (its share of the bus) |
 | `sound.luau` | plays an event the way sealitaire's playKnock does: the dry take (already through sealitaire's bank-wide low-pass) at its rung, plus the bus copy at the same rung through the two low-pass cutoffs `busSweep` sits between, at `busSend` x `send` |
 | `knock.luau` | **COPY of sealitaire's** (test:wetrisshared): the pitch step and the equal-power crossfade down the bus's cutoff ladder |
@@ -123,6 +123,28 @@ greyed stub until `public/wetris.riv` exists. The file must be built with
 `--publish` — the web runtime rejects unsigned scripts without a word — and
 the mount passes `enableGPUCanvas: true`, without which every pass is dead on
 the web and the board draws flat.
+
+Sound a script starts belongs to the shared audio engine, not the artboard:
+`rive.volume = 0` and `rive.cleanup()` leave it playing, and the music's
+repeats are scheduled seconds ahead. So the page talks to the board through
+the view-model number `quit`: `1` in hideWetris means "stop everything you
+started" (MUSIC.stop, SOUND.stopAll), and teardown waits three frames for it;
+`-1` on mount means "nothing is playing", which skips music.luau's rebuild
+handover — without it, coming back into the mode sat silent up to a whole
+loop. Test it in the harness with `?raf=timer` (the Browser pane barely runs
+rAF, so the board never gets the frames): `__audio()` RMS, `__hide()`,
+`__show()`.
+
+iPad, two traps the iPhone never shows (2026-09-26):
+- Rive's web runtime forwards EVERY mousemove as a pointer move, pressed or
+  not, and an Apple Pencil hovering sends a stream of them; it also passes a
+  touchcancel on to nobody. The board read the hover as a drag of a stuck
+  gesture — the piece walked and the seal flicked forever. wetrisTable.js
+  drops unpressed moves and post-touch mouse echoes before the canvas sees
+  them, and a new press takes over a stuck gesture (board.luau pointerDown).
+- The audio clock is frozen until the first touch. music.luau waits for it
+  to move and never reads `completed()`, which answered yes every frame and
+  started a new copy each time.
 
 ## Copy
 

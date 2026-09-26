@@ -1391,6 +1391,14 @@ local function deal(self: Table, seed: number)
                 if plate ~= nil then
                     plate.value = 1
                 end
+                -- Same reason as `plate` directly above: a fresh instance's
+                -- numbers are 0, and a corner scaled by 0 is a card with no
+                -- rank and no suit on it at all. applyLayout keeps it right
+                -- from here on; this is the value it starts at.
+                local corner = d:getNumber('cornerScale')
+                if corner ~= nil then
+                    corner.value = LAYOUT.cornerScale(self.L, T.cornerFloor or 12, T.cornerMax or 1.7)
+                end
                 table.clear(v.pulses)
                 table.clear(v.glows)
                 bindGlow(v, d, card)
@@ -2390,22 +2398,33 @@ local function nearStock(self: Table, px: number, py: number, m: number): boolea
 end
 
 local function pointerDown(self: Table, event: PointerEvent)
-    -- A GESTURE IS ALREADY RUNNING AND THIS IS NOT IT. On a phone that is a
-    -- second thumb, and without this it takes the card out of the first one's
-    -- hand: `self.drag` is one slot, so the new press overwrites it and the
-    -- run already in the air is never released — it hangs at z 5000 over the
-    -- table until the next deal. Dropped WITHOUT `event:hit()`, so the press
-    -- goes on to whatever is behind us rather than being silently eaten.
+    -- A NEW POINTER TAKES OVER, and whatever the last one was holding is put
+    -- back where it came from.
     --
-    -- ONLY WHILE ONE IS ACTUALLY IN FLIGHT, and the three things that can be
-    -- are named rather than trusted to the id alone. An `up` that never
-    -- arrives is not a rare case on a touchscreen — a finger can leave the
-    -- glass outside the window, or the page can lose the pointer to the
-    -- system — and an id claimed on a gesture that has quietly ended would
-    -- leave the table deaf to every finger but that one, for good.
-    if self.gestureId >= 0 and event.id ~= self.gestureId
-        and (self.drag ~= nil or self.tunerDrag > 0 or self.tunerPan >= 0) then
-        return
+    -- THERE IS NO SECOND FINGER TO DEFEND AGAINST. The web runtime is in
+    -- single-touch mode (`enableMultiTouch` defaults to false and nothing
+    -- here turns it on): it records one primary touch identifier at
+    -- touchstart and drops every other finger until that one lifts, so two
+    -- touches never both reach this script. A press under a new id is
+    -- therefore PROOF the previous gesture is over, not a rival for it.
+    --
+    -- AND `touchcancel` NEVER REACHES US, which is what makes that proof the
+    -- only recovery there is. The runtime's cancel handler clears its own
+    -- primary-touch lock and dispatches nothing — no pointerUp, no exit — so
+    -- a system gesture, an incoming call or the URL bar sliding away ends a
+    -- drag with the card still in the air and its id still claimed. Touch
+    -- identifiers never repeat. Refusing the new press (which this did) left
+    -- the table deaf to every finger for the rest of the session: the one
+    -- input failure that trying again cannot clear, and on a phone it reads
+    -- exactly as "it just stopped working".
+    if self.gestureId >= 0 and event.id ~= self.gestureId then
+        if self.drag ~= nil and not self.drag.pad then
+            -- Home, not onto whatever is under it: the player never chose to
+            -- drop it here, the gesture was taken away from them.
+            releaseDrag(self, nil)
+        end
+        self.tunerDrag = 0
+        self.tunerPan = -1
     end
     local at = throughCurve(self.L, event.position)
     local px, py = at.x, at.y
@@ -4890,6 +4909,12 @@ local function inkFor(self: Table, id: number): Artboard<Data.Card>?
     if plate ~= nil then
         plate.value = 0
     end
+    -- And the same for the ink copy, which is made lazily the first time a
+    -- card is a tank — long after the deal set the face's.
+    local corner = d:getNumber('cornerScale')
+    if corner ~= nil then
+        corner.value = LAYOUT.cornerScale(self.L, T.cornerFloor or 12, T.cornerMax or 1.7)
+    end
     bindGlow(v, d, card)
     v.ink = made
     return made
@@ -4971,6 +4996,45 @@ local function applyLayout(self: Table)
             local q = sys.puffs[i]
             q.x *= kx
             q.y *= ky
+        end
+    end
+
+    -- THE CORNER'S COMPENSATION, pushed to every card that exists.
+    --
+    -- Here rather than at the deal, because the thing it answers is the
+    -- SCREEN: a phone turned sideways mid-game, a desktop window dragged
+    -- narrow, the tuner's two rows being moved — none of those deal a card,
+    -- and all of them change `fit`. applyLayout is the one place that runs
+    -- for all of them.
+    --
+    -- Both instances per card. `v.ink` is the same rank artboard with the
+    -- plate hidden, drawn over a tank (inkFor), and it carries its own copy
+    -- of the view model — set one and not the other and the number cards
+    -- would compensate while the tanks stayed tiny, which reads as the
+    -- feature working on some cards and not others.
+    --
+    -- Written unconditionally rather than only when `fit` moved: it is 52
+    -- number writes on a resize, the views table is usually empty the first
+    -- time through, and a guard on the old value is a guard that is wrong
+    -- the first time a card is made.
+    -- Spelled out rather than looped over `{ v.inst, v.ink }`: a card that has
+    -- never been a tank has no `ink`, and a table literal with a nil in it is
+    -- a table with a hole, which iteration is not obliged to walk past.
+    local corner = LAYOUT.cornerScale(g, T.cornerFloor or 12, T.cornerMax or 1.7)
+    for _, v in pairs(self.views) do
+        local face = v.inst
+        if face ~= nil then
+            local prop = face.data:getNumber('cornerScale')
+            if prop ~= nil then
+                prop.value = corner
+            end
+        end
+        local ink = v.ink
+        if ink ~= nil then
+            local prop = ink.data:getNumber('cornerScale')
+            if prop ~= nil then
+                prop.value = corner
+            end
         end
     end
 

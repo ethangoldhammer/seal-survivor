@@ -44,18 +44,23 @@
 -- rebuild itself took is scheduled by nobody, and that loop is silent. That
 -- is the trade, on purpose — a missing loop is a pause, two loops is noise.
 --
--- IF THE CLOCK DOES NOT MOVE. sealitaire's music.luau has the scars: a frozen
--- `Audio.time()` wedged its first transport for good. If the engine clock
--- stands still for a second of frames, this stops scheduling and falls back
--- to restarting the loop when it completes — a gap at the seam, but music.
--- A frozen clock is the headless runs (screenshots, tests), which play no
--- sound at all; the grid only has to hold where the clock moves.
+-- IF THE CLOCK DOES NOT MOVE, NOTHING IS SCHEDULED — it waits. A frozen
+-- `Audio.time()` is an audio engine that is not running: the headless runs
+-- (which play no sound at all), and a phone or iPad whose browser holds the
+-- audio suspended until the player first touches the page. On the iPad this
+-- used to fall back, after a second, to restarting the loop whenever the
+-- voice said `completed()` — and that answer is not trustworthy (sealitaire's
+-- music.luau has the scars: a handle that played nothing answers yes), so it
+-- started a new copy every frame and the music came out as a stutter of
+-- starts. Nothing here reads `completed()` now. The grid is placed on the
+-- first frame the clock is SEEN TO MOVE, and a clock that stops again
+-- mid-loop (a tab put in the background) simply schedules nothing until it
+-- moves again.
 -- ============================================================================
 
 local M = {}
 
 local AHEAD = 1.5       -- s: schedule the next repeat this long before it is due
-local FROZEN = 1.0      -- s of frames with no engine clock movement before falling back
 local RELOAD_GAP = 2.0  -- s: an engine older than this module by more than this is a rebuild's
 local GRID0 = RELOAD_GAP + 0.1  -- engine s: the first context's first copy, and the grid's origin
 local HANDOVER = 0.25   -- s the driving board may go quiet before another takes over
@@ -87,11 +92,12 @@ local S = {
     voices = {} :: { Voice },
     nextAt = -1,            -- engine time the next copy is due, -1 until the grid is placed
     lastClock = -1,
-    still = 0,              -- seconds of frames the engine clock has not moved
-    fallback = false,
+    moved = false,          -- the engine clock has been seen to move: it is running
     owner = nil :: Music?,
     ownerQuiet = 0,
     sinceLoad = 0,          -- seconds of frames since this context first drove
+    stopped = false,        -- M.stop() has run: the board is on its way out
+    fresh = false,          -- M.fresh(): the page vouches nothing is playing
 }
 
 -- A fresh context, for tests: what a rebuild does to this module.
@@ -102,11 +108,12 @@ function M.reset()
     S.voices = {}
     S.nextAt = -1
     S.lastClock = -1
-    S.still = 0
-    S.fallback = false
+    S.moved = false
     S.owner = nil
     S.ownerQuiet = 0
     S.sinceLoad = 0
+    S.stopped = false
+    S.fresh = false
 end
 
 function M.new(): Music
@@ -171,6 +178,10 @@ end
 -- opens the grid; a later one joins it at the first point nobody before it
 -- can have scheduled.
 local function placeGrid(now: number)
+    if S.fresh then
+        S.nextAt = now + 0.05
+        return
+    end
     local loadedAt = now - S.sinceLoad
     if loadedAt <= RELOAD_GAP then
         S.nextAt = GRID0
@@ -184,7 +195,38 @@ local function placeGrid(now: number)
     )
 end
 
+-- SILENCE, for the way out. Every copy this context started or scheduled —
+-- the one playing and the one queued AHEAD seconds early — stopped, and the
+-- transport parked so nothing schedules another. The artboard's own teardown
+-- does not do this: a sound a script starts belongs to the audio engine, not
+-- the artboard, and on the web it played on after the board was gone.
+-- A CLEAN START, from the page that mounted this board: it tore the last
+-- board down with M.stop(), so an engine older than this context is NOT a
+-- rebuild's orphan still playing. Without this, coming back into the mode
+-- sat in silence until the next grid point, up to a whole loop. A grid
+-- already placed for an orphan is re-placed, as long as nothing has started.
+function M.fresh()
+    if #S.voices > 0 then
+        return
+    end
+    S.fresh = true
+    S.nextAt = -1
+end
+
+function M.stop()
+    for _, v in S.voices do
+        pcall(function()
+            v.snd:stop()
+        end)
+    end
+    S.voices = {}
+    S.stopped = true
+end
+
 function M.step(m: Music, dt: number, volume: number)
+    if S.stopped then
+        return
+    end
     -- One driver. Anyone else waits, and takes over only if it goes quiet.
     if S.owner ~= m then
         if S.owner ~= nil and S.ownerQuiet <= HANDOVER then
@@ -200,47 +242,34 @@ function M.step(m: Music, dt: number, volume: number)
     end
     S.sinceLoad += dt
     local now = M.engine.time()
-    if now == S.lastClock then
-        S.still += dt
-        if S.still > FROZEN and not S.fallback then
-            S.fallback = true
-            print('wetris: the audio clock is not moving; the music restarts on completion instead')
-        end
-    else
-        S.still = 0
-    end
+    local last = S.lastClock
     S.lastClock = now
-
-    if S.fallback then
-        local live = false
-        for _, v in S.voices do
-            if not v.snd:completed() then
-                live = true
-            end
-        end
-        if not live then
-            table.clear(S.voices)
-            start(0)
-        end
-    else
-        if S.nextAt < 0 then
-            placeGrid(now)
-        end
-        -- Every copy that falls due inside the look-ahead, at exact multiples
-        -- of the loop from the grid's origin.
-        while S.nextAt - now < AHEAD do
-            start(S.nextAt)
-            S.nextAt += S.seconds
-        end
-        -- Forget the ones whose music has long finished.
-        local i = 1
-        while i <= #S.voices do
-            local v = S.voices[i]
-            if v.at + S.seconds + 1 < now then
-                table.remove(S.voices, i)
-            else
-                i += 1
-            end
+    if last >= 0 and now ~= last then
+        S.moved = true
+    end
+    -- Never seen to move: the engine is not running (see the header). Wait.
+    -- Once it has, a clock that stops again schedules nothing by itself —
+    -- the look-ahead below is measured against it.
+    if not S.moved then
+        return
+    end
+    if S.nextAt < 0 then
+        placeGrid(now)
+    end
+    -- Every copy that falls due inside the look-ahead, at exact multiples
+    -- of the loop from the grid's origin.
+    while S.nextAt - now < AHEAD do
+        start(S.nextAt)
+        S.nextAt += S.seconds
+    end
+    -- Forget the ones whose music has long finished.
+    local i = 1
+    while i <= #S.voices do
+        local v = S.voices[i]
+        if v.at + S.seconds + 1 < now then
+            table.remove(S.voices, i)
+        else
+            i += 1
         end
     end
     for _, v in S.voices do

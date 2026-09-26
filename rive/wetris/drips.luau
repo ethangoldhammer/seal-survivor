@@ -22,6 +22,12 @@
 -- A piece that locks lets go of every drop still forming on it: they drop
 -- onto what is now the stack, which is the piece they came from.
 --
+-- BURSTS are the other kind: a cleared line blows apart into goo that flies
+-- out fast and dies fast — each drop the colour its cell had evolved to
+-- (ink.luau's evolved), shrinking to nothing over a short life. They never
+-- land or stain; they are one metaball each in the same field, so they weld
+-- to each other as they leave and neck apart as they spread.
+--
 -- Pure: no renderer. board.luau forms, steps and writes.
 -- ============================================================================
 
@@ -45,7 +51,12 @@ export type Drip = {
     row: number, col: number,   -- the cell it landed on (0 = the floor)
 }
 
-export type Drips = { list: { Drip }, carry: number }
+export type Burst = {
+    x: number, y: number, vx: number, vy: number,
+    r: number, rgb: { number }, age: number, life: number,
+}
+
+export type Drips = { list: { Drip }, carry: number, bursts: { Burst } }
 
 -- The well as the drips need it, artboard px.
 export type Well = {
@@ -63,13 +74,15 @@ export type Hold = {
 
 local SETTLE = 0.45     -- s a landed drop takes to sink into the cell
 local MAX_LIST = 40     -- drops alive at once; a flier is two metaball slots
+local MAX_BURST = 48    -- burst drops alive at once, one slot each
 
 function M.new(): Drips
-    return { list = {}, carry = 0 }
+    return { list = {}, carry = 0, bursts = {} }
 end
 
 function M.clear(d: Drips)
     table.clear(d.list)
+    table.clear(d.bursts)
     d.carry = 0
 end
 
@@ -245,6 +258,60 @@ function M.step(d: Drips, dt: number, w: Well, ink: INK.Ink, g: number, drag: nu
     return landings
 end
 
+-- A cleared line blows apart. `cells` is every cleared cell: its centre (px)
+-- and its evolved colour. `count` drops per cell (a fraction rounds by
+-- chance), capped at MAX_BURST across the whole clear and shared out so a
+-- tetris is as even as a single; each leaves its cell in any direction at up
+-- to `speed` px/s, radius `r` px, living `life` s (each a little different).
+export type BurstCell = { x: number, y: number, rgb: { number } }
+
+function M.burst(d: Drips, cells: { BurstCell }, count: number, speed: number, r: number, life: number, cellPx: number)
+    local n = #cells
+    if n == 0 or count <= 0 then
+        return
+    end
+    local total = math.min(MAX_BURST, math.floor(n * count + math.random()))
+    -- Make room: the oldest bursts go first.
+    while #d.bursts + total > MAX_BURST and #d.bursts > 0 do
+        table.remove(d.bursts, 1)
+    end
+    for i = 1, total do
+        local c = cells[((i - 1) % n) + 1]
+        local a = math.random() * math.pi * 2
+        local v = speed * (0.35 + 0.65 * math.random())
+        -- A little upward, so the line throws itself up and out.
+        local vx, vy = math.cos(a) * v, math.sin(a) * v - speed * 0.25
+        local j = cellPx * 0.35
+        table.insert(d.bursts, {
+            x = c.x + (math.random() - 0.5) * j, y = c.y + (math.random() - 0.5) * j,
+            vx = vx, vy = vy,
+            r = r * (0.6 + 0.8 * math.random()),
+            rgb = c.rgb, age = 0,
+            life = math.max(0.03, life * (0.6 + 0.8 * math.random())),
+        })
+    end
+end
+
+-- Bursts fly, drag down hard, and die. `g` px/s².
+function M.stepBursts(d: Drips, dt: number, g: number, drag: number)
+    local keep = math.exp(-drag * dt)
+    local i = 1
+    while i <= #d.bursts do
+        local p = d.bursts[i]
+        p.age += dt
+        if p.age >= p.life then
+            table.remove(d.bursts, i)
+        else
+            p.vy += g * dt
+            p.vx *= keep
+            p.vy *= keep
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+            i += 1
+        end
+    end
+end
+
 -- Into crt.wgsl's rows: x, y, radius, alpha | rgb. A FORMING drop swells from
 -- a bead to full size; a landed one shrinks and fades into its cell; a FALLING
 -- one is a head and a smaller tail trailing back along its velocity, welded
@@ -263,6 +330,16 @@ end
 
 function M.write(d: Drips, b: buffer, stretch: number): number
     local slot = 0
+    -- Bursts first: they are the moment, and gone in half a second. Each
+    -- shrinks from full size to nothing, quickest at the end.
+    for _, p in d.bursts do
+        if slot >= INK.MAX_DRIPS then
+            break
+        end
+        local t = p.age / p.life
+        slot += 1
+        put(b, slot, p.x, p.y, p.r * math.sqrt(math.max(0, 1 - t)), 1, p.rgb)
+    end
     for _, p in d.list do
         if slot >= INK.MAX_DRIPS then
             break
