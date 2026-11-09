@@ -1,0 +1,12 @@
+# Unreal Engine: copy to <UE project>/.gitignore
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+.idea/
+*.sln
+*.suo
+*.VC.db
+*.opensdf
+*.sdf
