@@ -125,7 +125,10 @@ bpy.ops.object.mode_set(mode='OBJECT')
 roots = [b.name for b in arm.data.bones if b.parent is None]
 assert roots == ['root_01'], roots
 
-dims = Vector(mesh.dimensions)
+# REST-shape size from the raw vertices: mesh.dimensions is the POSED mesh (the import leaves the
+# `ball` clip evaluated), which read 2.11 m long when the seal is really 1.68 m.
+_vs = [v.co for v in mesh.data.vertices]
+dims = Vector([max(v[i] for v in _vs) - min(v[i] for v in _vs) for i in range(3)])
 print(f'[seal] skeleton ok: root={roots[0]}, bones={len(arm.data.bones)}, '
       f'mesh {dims.x:.3f} x {dims.y:.3f} x {dims.z:.3f} m')
 

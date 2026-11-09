@@ -134,7 +134,7 @@ Writes `build/ue5-seal/`: `SK_Seal.fbx` (mesh + 26-bone skeleton, single root `r
 armature only) and `manifest.json` (length, loop, notes per clip). Loops include the duplicate end frame.
 
 What it fixes: drops the glTF wrapper empties and `_rootJoint`/`Armature_00`, crops Idle to the game's
-wag pair, resets the swim flipper chain, strips the Strike travel. Seal is about 211 cm long in cm units.
+wag pair, resets the swim flipper chain, strips the Strike travel. The seal is 168 cm long in its rest pose.
 
 Still manual in UE:
 
