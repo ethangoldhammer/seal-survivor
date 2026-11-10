@@ -97,9 +97,12 @@ const extreme = (axis, sign) => verts.reduce((best, v) => (sign * v[axis] > sign
 // GLB accessor space -> UE local space (cm), for a skeletal mesh built by tools/ue5-seal-export.py.
 // Step 1, MEASURED (Blender glTF import, 1374 of 1374 vertices, max error 4e-7):
 //   blender = (acc.x, -(acc.z + 0.2081), acc.y - 0.1347)      // Y-up -> Z-up, plus a 0.13/0.21 shift
-// Step 2, ASSUMED, check it in UE (facing check in SEAL-ANIM-STATE-MACHINE.md): the FBX export
-//   (forward -Y, up Z, 100x) lands as   ue = 100 * (-blender.y, -blender.x, blender.z)
-// If the seal faces the wrong way in UE, only step 2 is wrong.
+// Step 2: tools/ue5-seal-export.py yaws the seal +90 deg about Z (head to +X, CONFIRMED in UE 5.9 by the
+//   Windows session) and scales x100. UE's importer also mirrors Y for handedness (UNCONFIRMED), so a
+//   correctly imported seal has its LEFT flipper on UE -Y. That gives (b = blender coords above):
+//     ue = 100 * (-b.y, -b.x, b.z)
+//   If the left flipper (hand_L_014) lands on UE +Y instead, the importer did NOT mirror: change the HLSL
+//   Acc.x to +P.y * 0.01 and ue.y here to +b.x * 100.
 const accToUe = ([ax, ay, az]) => {
   const b = [ax, -(az + 0.2081), ay - 0.1347];
   return [-b[1] * 100, -b[0] * 100, b[2] * 100];

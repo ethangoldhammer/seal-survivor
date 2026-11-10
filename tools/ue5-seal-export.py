@@ -22,8 +22,9 @@ What it does that a plain glTF -> FBX would not:
   * Strike (`roll`): strips the 1.58 m X travel on center_ctrl_03 so the
     movement component owns the dash
 
-Orientation: the seal faces -Y in Blender. Exported with forward=-Y, up=Z;
-confirm in UE that it faces the red X arrow (flip AXIS_FORWARD below if not).
+Orientation: the seal faces -Y in the glb. The script yaws it +90 deg (YAW_DEG) so it
+faces +X, and exports with forward=-Y, up=Z. Checked in UE 5.9: faces the red X arrow.
+(AXIS_FORWARD has no effect on UE's import; see the note at YAW_DEG.)
 """
 import bpy, json, math, os, sys
 from mathutils import Vector
@@ -37,6 +38,13 @@ os.makedirs(OUT, exist_ok=True)
 FPS = 30
 SRC_FPS = 24          # the glb's authoring rate (Blender reads it as 24)
 AXIS_FORWARD, AXIS_UP = '-Y', 'Z'
+# UE 5.9's FBX import (Interchange) reads the axis system from the file and converts it back, so
+# AXIS_FORWARD alone cannot turn the seal: X, -X and -Y all import with the head on UE +Y.
+# Instead the rig + mesh are yawed in Blender and the rotation applied (baked into the rest pose)
+# before export. +90 deg about Z takes the head from Blender -Y to +X, which is UE's +X (red arrow).
+# (Found and verified by the Windows session, branch ue5-seal-facing-x, d966892.)
+YAW_DEG = 90.0
+UNIT = 100.0          # Blender units per metre in the export (cm), see the bake below
 PREFIX = 'Furseal_Rig|Furseal_Rig|Furseal_Rig|'
 
 # name -> source clip, optional (t0, t1) seconds, loop, notes
@@ -104,6 +112,20 @@ arm.name = 'Armature'
 arm.data.name = 'Armature'
 mesh.name = 'SK_Seal'
 
+# face UE +X and work in cm: yaw + scale rig and mesh, and bake both into the rest pose / vertices.
+# Rotations in the clips are bone-local, so the yaw leaves them alone; their locations are scaled by
+# UNIT in sample(). Scene unit 0.01 makes the FBX unit cm, so nothing is scaled at export or import
+# (with the default m->cm conversion UE 5.9 puts x100 on root_01 in the skeleton but x1 in every clip).
+for o in bpy.data.objects:
+    o.select_set(o in (arm, mesh))
+bpy.context.view_layer.objects.active = arm
+arm.rotation_mode = 'XYZ'
+arm.rotation_euler.z += math.radians(YAW_DEG)
+arm.scale = arm.scale * UNIT
+bpy.context.view_layer.update()
+bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+scn.unit_settings.scale_length = 1.0 / UNIT
+
 # no vertex may depend on a bone we are about to delete
 vg_idx = {vg.index for vg in mesh.vertex_groups if vg.name in DROP_BONES}
 leaked = sum(1 for v in mesh.data.vertices for g in v.groups if g.group in vg_idx and g.weight > 1e-4)
@@ -128,7 +150,7 @@ assert roots == ['root_01'], roots
 # REST-shape size from the raw vertices: mesh.dimensions is the POSED mesh (the import leaves the
 # `ball` clip evaluated), which read 2.11 m long when the seal is really 1.68 m.
 _vs = [v.co for v in mesh.data.vertices]
-dims = Vector([max(v[i] for v in _vs) - min(v[i] for v in _vs) for i in range(3)])
+dims = Vector([max(v[i] for v in _vs) - min(v[i] for v in _vs) for i in range(3)]) / UNIT
 print(f'[seal] skeleton ok: root={roots[0]}, bones={len(arm.data.bones)}, '
       f'mesh {dims.x:.3f} x {dims.y:.3f} x {dims.z:.3f} m')
 
@@ -160,6 +182,7 @@ def sample(src_act, t0, t1):
             for prop, dflt in _DEFAULT.items():
                 vals.append(tuple(cur[(b, prop, k)].evaluate(f) if (b, prop, k) in cur else dflt[k]
                                   for k in range(len(dflt))))
+            vals[0] = tuple(v * UNIT for v in vals[0])   # metres -> cm, to match the baked rest pose
             fr[b] = tuple(vals)
         out.append(fr)
     return out
@@ -179,7 +202,7 @@ def apply_fix(kind, frames):
         for fr in frames:
             l, q, s = fr[b]
             fr[b] = ((x0, l[1], l[2]), q, s)
-        notes.append(f'removed {hi - lo:.3f} m travel on {b} local X')
+        notes.append(f'removed {(hi - lo) / UNIT:.3f} m travel on {b} local X')
     return notes
 
 
@@ -215,7 +238,7 @@ def export(path, objs, anim, frame_end=0):
 
 
 # ---------------------------------------------------------------- export
-manifest = {'fps': FPS, 'axis_forward': AXIS_FORWARD, 'axis_up': AXIS_UP,
+manifest = {'fps': FPS, 'axis_forward': AXIS_FORWARD, 'axis_up': AXIS_UP, 'yaw_deg': YAW_DEG,
             'seal_length_m': round(max(dims.x, dims.y, dims.z), 3),
             'root_bone': 'root_01', 'clips': {}}
 
