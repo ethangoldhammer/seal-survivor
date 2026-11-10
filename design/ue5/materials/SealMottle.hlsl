@@ -25,10 +25,9 @@
 // THE AXIS REMAP below is the one fragile line. It turns UE's pre-skinned local position (cm) back into
 // the GLB's own vertex space, where `Size` is measured. The GLB -> Blender-rest shift is measured exactly
 // (1374/1374 vertices). tools/ue5-seal-export.py then yaws the seal so the head is on UE +X (confirmed
-// in UE 5.9) and works in cm. NOT CONFIRMED: that UE's importer mirrors Y for handedness, which a correct
-// import does. Check: bone hand_L_014 (the seal's left flipper) should sit at NEGATIVE Y in UE. If it is
-// POSITIVE, there was no mirror: change `-P.y * 0.01` to `P.y * 0.01` below and nothing else.
-// A wrong sign shows as mirrored spots (left and right swapped), not as an error.
+// in UE 5.9) and works in cm. CONFIRMED on the Windows import: UE mirrors Y for handedness, so hand_L_014 (the seal's left
+// flipper) sits at (13.9, -50.0, -12.15) cm. The remap below is therefore right as written. If the export ever
+// changes, re-check that bone: a wrong sign shows as mirrored spots (left and right swapped), not an error.
 //
 // KNOWN LIMIT: fract(sin(x) * 43758.5453) is GPU-dependent. UE will match the three.js pattern in scale,
 // contrast and character, but not necessarily freckle for freckle on every GPU. For an exact match, bake

@@ -35,9 +35,8 @@ Colours are exported as LINEAR floats (`params.json`); feed those to UE, not the
 
 - **Axis remap.** UE pre-skinned local (cm) is turned back into GLB space by three lines in the HLSL.
   Facing is settled: the export yaws the seal so the head is on UE +X (confirmed on the Windows
-  import). The one open question is the Y sign: a correct import mirrors Y, so the seal's left flipper
-  (`hand_L_014`) should be at NEGATIVE Y in UE. If it is positive, flip the sign on `P.y` in the HLSL
-  (instructions in its header). A wrong sign shows as mirrored spots, not an error. `reference.json`
+  import). The Y sign is confirmed too: UE mirrors Y, and `hand_L_014` sits at (13.9, -50.0, -12.15) cm in
+  `SK_Seal_Skeleton`. If the export changes, re-check that bone; a wrong sign shows as mirrored spots, not an error. `reference.json`
   lists six landmark vertices in UE local cm with their expected noise value `n`.
 - **Pre-Skinned Local Position on a skeletal mesh.** If the node returns zero or a flat result in
   your 5.9 preview build (it can depend on skin cache settings), the fallback is to bake the rest
