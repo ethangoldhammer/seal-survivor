@@ -16,9 +16,10 @@ What it does that a plain glTF -> FBX would not:
     `subclips`) so the idle crop 28-68 lands on whole frames
   * Idle is the game's crop (water_idle frames 28-68), not the raw clip,
     which hitches once per loop
-  * Swim: resets uparm_R_016/arm_R_017/hand_R_018/neck01_05 to bind pose.
-    The clip pins them with ONE keyframe each, which leaves the right flipper
-    74 degrees out of place while the left sits at bind
+  * Swim: resets uparm_R_016/arm_R_017/hand_R_018 to bind pose. The clip pins
+    them with ONE keyframe each, which leaves the right flipper off-pose while
+    the left sits at bind. neck01_05 is also single-keyed but that key IS the
+    swim neck, so it is kept
   * Strike (`roll`): strips the 1.58 m X travel on center_ctrl_03 so the
     movement component owns the dash
 
@@ -62,7 +63,10 @@ CLIPS = {
     'SurfaceIdle': dict(src='idle', loop=True),
     'SurfaceMove': dict(src='walk', loop=True),
 }
-SWIM_RESET = ['uparm_R_016', 'arm_R_017', 'hand_R_018', 'neck01_05']
+# NOT neck01_05: its single keyframe is the authored swim neck (62 deg about X, vs ~54 in the other clips),
+# not a stray. Resetting it to bind stood the neck upright against neck02/head, which keep their swim
+# rotations, and arched the whole back. Only the right flipper chain is a genuine stray.
+SWIM_RESET = ['uparm_R_016', 'arm_R_017', 'hand_R_018']
 DROP_BONES = ['_rootJoint', 'Armature_00']
 
 # ---------------------------------------------------------------- import
